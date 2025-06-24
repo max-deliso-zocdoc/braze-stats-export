@@ -5,6 +5,7 @@ request_log.json
 braze_export.log
 braze_ingest.log
 braze_forecast.log
+braze_historical_ingest.log
 
 # Time-series data files
 data/

@@ -52,3 +52,6 @@ forecast-full:                                    ## Full pipeline: ingest data 
 
 sample-data:                                      ## Create sample data for testing
 	pyenv exec python src/forecast_quiet_dates.py --create-sample-data
+
+ingest-historical:                                ## Ingest last 60 days of data
+	pyenv exec python src/ingest_historical.py --days 60
