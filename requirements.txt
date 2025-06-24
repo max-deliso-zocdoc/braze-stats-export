@@ -1,0 +1,6 @@
+requests~=2.32
+tenacity~=8.2
+python-dotenv~=1.0
+black~=24.3
+flake8~=7.0
+pytest~=8.2
