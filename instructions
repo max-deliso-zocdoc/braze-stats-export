@@ -1,0 +1,130 @@
+**Goal** — Keep a local, append-only time-series cache of daily Canvas activity pulled from the Braze REST API and periodically fit a simple linear-decay model to forecast each Canvas’ “quiet date” (the day expected sends drop to \~0).
+
+## Directory layout for the cache
+
+```
+braze-stats-export/
+│
+├─ data/                 # ← one JSONL file per Canvas ID
+│   ├─ 12345abcdef.jsonl
+│   └─ b67890fedcba.jsonl
+└─ src/
+    ├─ main.py           # stub caller (already in repo)
+    └─ ingest_daily.py   # you’ll add this (see snippet below)
+```
+
+*Each line of the JSONL file is a **daily** record, so appending is O(1) and easily diff-able.*
+
+### JSON schema per line
+
+```jsonc
+{
+  "date": "2025-06-24",
+  "entries":  738,
+  "sends":    721,
+  "delivered":700,
+  "opens":    58,
+  "conversions": 5
+}
+```
+
+---
+
+## 3  API calls you need
+
+| Endpoint              | Purpose                                                       | Docs             |
+| --------------------- | ------------------------------------------------------------- | ---------------- |
+| `/canvas/list`        | Paginate through all Canvas IDs and names.                    | ([braze.com][1]) |
+| `/canvas/data_series` | Pull the **daily** stats. Accepts `length`, `ending_at`, etc. | ([braze.com][2]) |
+
+Call pattern for yesterday-only:
+
+```http
+GET /canvas/data_series?canvas_id=<ID>&length=1&ending_at=<YYYY-MM-DD>
+```
+
+> `ending_at` is **inclusive** and expects midnight UTC. Supply yesterday’s date each run.
+
+---
+
+## 4  Ingestion script skeleton (`src/ingest_daily.py`)
+
+```python
+import datetime as dt
+import json
+import os
+from pathlib import Path
+from typing import Final, List
+
+import requests
+from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+load_dotenv()
+
+BRAZE_ENDPOINT: Final[str] = "https://rest.iad-02.braze.com"
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+API_KEY = os.environ["BRAZE_REST_KEY"]
+HEADERS = {"Authorization": f"Bearer {API_KEY}"}
+YESTERDAY = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+
+
+def canvas_ids() -> List[str]:
+    ids = []
+    url = f"{BRAZE_ENDPOINT}/canvas/list"
+    params = {"limit": 100}
+    while True:
+        resp = requests.get(url, headers=HEADERS, params=params, timeout=10).json()
+        ids.extend(c["id"] for c in resp["canvases"])
+        if resp.get("next_page") is None:
+            break
+        url = f"{BRAZE_ENDPOINT}{resp['next_page']}"
+    return ids
+
+
+@retry(wait=wait_exponential(min=1, max=30), stop=stop_after_attempt(5))
+def daily_row(cid: str) -> dict:
+    resp = requests.get(
+        f"{BRAZE_ENDPOINT}/canvas/data_series",
+        headers=HEADERS,
+        params={"canvas_id": cid, "length": 1, "ending_at": YESTERDAY},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()["data"][0]        # single-day slice
+    data["date"] = YESTERDAY             # add an explicit date field
+    return data
+
+
+def append_jsonl(cid: str, row: dict) -> None:
+    path = DATA_DIR / f"{cid}.jsonl"
+    # skip if this date already present
+    if path.exists() and any(line.startswith(f'{{"date":"{YESTERDAY}"') for line in path.open()):
+        return
+    with path.open("a") as fp:
+        fp.write(json.dumps(row) + "\n")
+
+
+def main():
+    for cid in canvas_ids():
+        try:
+            row = daily_row(cid)
+            append_jsonl(cid, row)
+            print(f"✓ {cid}   {row['sends']} sends")
+        except Exception as exc:  # broad catch so one failure won't stop the loop
+            print(f"⚠ {cid}   {exc}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+*Run it once a day; it appends exactly one line per Canvas.*
+
+---
+
+[1]: https://www.braze.com/docs/api/endpoints/export/canvas/get_canvases?utm_source=chatgpt.com "GET: Export Canvas List - Braze"
+[2]: https://www.braze.com/docs/api/endpoints/export/canvas/get_canvas_analytics?utm_source=chatgpt.com "GET: Export Canvas Data Series Analytics - Braze"
+

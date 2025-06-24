@@ -22,11 +22,17 @@ activate:                                         ## Print 'export PYENV_VERSION
 	@echo "Run this to activate the venv:" && \
 	 echo "  export PYENV_VERSION=$(VENV_NAME)"
 
-run:                                              ## python src/main.py
-	pyenv exec python $(MAIN)
+run:                                              ## python -m src.main
+	pyenv exec python -m src.main
 
 lint:                                             ## flake8 .
 	pyenv exec flake8 src/
+
+test:                                             ## Run unit tests
+	pyenv exec python -m pytest tests/ -v
+
+test-cov:                                         ## Run tests with coverage
+	pyenv exec python -m pytest tests/ -v --cov=src --cov-report=html --cov-report=term
 
 fmt:                                              ## black .
 	pyenv exec black src/
