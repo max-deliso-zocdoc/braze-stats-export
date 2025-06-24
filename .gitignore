@@ -3,6 +3,15 @@ canvas_list.json
 canvas_details.json
 request_log.json
 braze_export.log
+braze_ingest.log
+braze_forecast.log
+
+# Time-series data files
+data/
+*.jsonl
+
+# Forecast reports
+forecast_report_*.json
 
 # Python
 __pycache__/

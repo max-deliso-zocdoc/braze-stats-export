@@ -1,6 +1,6 @@
 # Braze Canvas Export Tool
 
-A comprehensive Python tool for extracting and analyzing Braze Canvas data via the Braze REST API. This tool provides detailed statistics, insights, and exports of your Braze Canvas workflows.
+A comprehensive Python tool for extracting and analyzing Braze Canvas data via the Braze REST API. This tool provides detailed statistics, insights, exports of your Braze Canvas workflows, and **time-series forecasting** to predict when Canvas sends will decay to zero (the "quiet date").
 
 ## Features
 
@@ -23,6 +23,14 @@ A comprehensive Python tool for extracting and analyzing Braze Canvas data via t
 - Canvas variant analysis
 - Performance monitoring with response times
 - Success rate tracking
+
+🔮 **Time-Series Forecasting (NEW)**
+- Daily Canvas send data ingestion with append-only JSONL storage
+- Linear and exponential decay models for quiet date prediction
+- Confidence scoring for prediction reliability
+- Trend analysis (declining, stable, growing)
+- Comprehensive forecast reports with urgent Canvas identification
+- Batch processing for all Canvas IDs with historical data
 
 ## Quick Start
 
@@ -55,14 +63,125 @@ Or run directly:
 BRAZE_REST_KEY=your-braze-rest-key python -m src.main
 ```
 
+## Time-Series Forecasting
+
+### Daily Data Ingestion
+
+The tool provides a comprehensive forecasting system that ingests daily Canvas statistics and predicts when Canvas sends will decay to approximately zero (the "quiet date").
+
+**Ingest daily data:**
+```bash
+# Ingest yesterday's data for all canvases
+BRAZE_REST_KEY=your-braze-rest-key make ingest
+
+# Or ingest specific date
+BRAZE_REST_KEY=your-braze-rest-key python src/ingest_daily.py 2023-12-15
+```
+
+**Data Structure:**
+Each Canvas gets its own JSONL file in the `data/` directory:
+```
+data/
+├── canvas-id-1.jsonl
+├── canvas-id-2.jsonl
+└── canvas-id-3.jsonl
+```
+
+Each line contains daily statistics:
+```json
+{
+  "date": "2023-12-15",
+  "entries": 738,
+  "sends": 721,
+  "delivered": 700,
+  "opens": 58,
+  "conversions": 5
+}
+```
+
+### Generate Forecasts
+
+**Full pipeline (ingest + forecast):**
+```bash
+BRAZE_REST_KEY=your-braze-rest-key make forecast-full
+```
+
+**Forecast from existing data:**
+```bash
+make forecast
+```
+
+**Create sample data for testing:**
+```bash
+make sample-data
+```
+
+### Forecast Output
+
+The tool generates comprehensive reports with:
+
+```
+🔮 CANVAS QUIET DATE FORECAST REPORT
+======================================================================
+
+📊 OVERVIEW:
+  • Total Canvases Analyzed: 25
+  • Predictable Quiet Dates: 18
+  • Unpredictable: 7
+  • Going Quiet Soon (≤30 days): 3
+  • Going Quiet Later (>30 days): 15
+
+📈 CURRENT TRENDS:
+  📉 Declining: 12
+  📊 Stable: 8
+  📈 Growing: 3
+  ❓ Insufficient Data: 2
+
+🎯 PREDICTION CONFIDENCE:
+  • High (≥70%): 8
+  • Medium (40-70%): 7
+  • Low (<40%): 3
+
+⚠️  URGENT: CANVASES GOING QUIET SOON
+   Canvas ID                         Quiet Date    Days  Confidence  Trend
+   ----------------------------------------------------------------
+   canvas-lifecycle-welcome          2024-01-15      8    85.2%      declining
+   canvas-retention-day7             2024-01-22     15    72.1%      declining
+   canvas-promo-holiday              2024-01-25     18    91.5%      declining
+```
+
+### Forecasting Methods
+
+The tool uses multiple regression models and automatically selects the best fit:
+
+1. **Linear Decay Model**: `y = ax + b`
+   - Best for steady declining trends
+   - Predicts when sends will reach the quiet threshold
+
+2. **Exponential Decay Model**: `y = a * e^(-bx) + c`
+   - Better for accelerating decay patterns
+   - Handles rapid drop-offs more accurately
+
+**Confidence Scoring:**
+- Based on R-squared values from regression models
+- Adjusted for data quality (more data = higher confidence)
+- Reduced for growing trends (less reliable for prediction)
+
 ## Output Files
 
 The tool generates several files:
 
+**Canvas Analysis:**
 - **`canvas_list.json`** - Complete list of all canvases with basic metadata
 - **`canvas_details.json`** - Detailed configurations for sample canvases
 - **`request_log.json`** - Complete log of all API requests with performance data
 - **`braze_export.log`** - Application logs with timestamps
+
+**Time-Series Forecasting:**
+- **`data/*.jsonl`** - Daily time-series data for each Canvas (append-only)
+- **`forecast_report_YYYYMMDD_HHMMSS.json`** - Comprehensive forecast analysis
+- **`braze_ingest.log`** - Data ingestion logs
+- **`braze_forecast.log`** - Forecasting process logs
 
 ## Sample Output
 
@@ -142,12 +261,19 @@ class CanvasDetails:
 
 ## API Endpoints Used
 
+**Canvas Analysis:**
 - `GET /canvas/list` - Retrieve list of all canvases
 - `GET /canvas/details` - Get detailed canvas configuration
+
+**Time-Series Forecasting:**
+- `GET /canvas/list` - Retrieve all Canvas IDs for data ingestion
+- `GET /canvas/data_series` - Get daily Canvas statistics (entries, sends, delivered, opens, conversions)
 
 ## Development
 
 ### Available Make Commands
+
+**Core Analysis:**
 ```bash
 make setup      # Complete setup (venv + dependencies)
 make run        # Run the main script
@@ -156,6 +282,14 @@ make test-cov   # Run tests with coverage report
 make lint       # Run flake8 linting
 make fmt        # Format code with black
 make clean      # Clean up virtual environment
+```
+
+**Time-Series Forecasting:**
+```bash
+make ingest         # Ingest daily Canvas data
+make forecast       # Generate forecasts from existing data
+make forecast-full  # Full pipeline: ingest + forecast
+make sample-data    # Create sample data for testing
 ```
 
 ### Architecture
@@ -173,13 +307,18 @@ src/
 │   └── data_storage.py # JSON file operations
 ├── analytics/       # Analytics and reporting
 │   └── statistics.py # Statistics engine
-└── main.py          # Application entry point
+├── forecasting/     # Time-series forecasting (NEW)
+│   └── linear_decay.py # Regression models for quiet date prediction
+├── main.py          # Application entry point (Canvas analysis)
+├── ingest_daily.py  # Daily data ingestion script
+└── forecast_quiet_dates.py # Forecasting pipeline
 
 tests/               # Comprehensive unit tests
 ├── test_models.py   # Model tests
 ├── test_api.py      # API client tests
 ├── test_storage.py  # Storage tests
-└── test_analytics.py # Analytics tests
+├── test_analytics.py # Analytics tests
+└── test_forecasting.py # Forecasting tests (NEW)
 ```
 
 **Key Components:**
@@ -187,7 +326,8 @@ tests/               # Comprehensive unit tests
 - **API Package** - HTTP client with comprehensive logging
 - **Storage Package** - JSON persistence with error handling
 - **Analytics Package** - Statistics and reporting engine
-- **Comprehensive Test Suite** - 53 tests with 79% coverage
+- **Forecasting Package** - Time-series analysis with linear/exponential decay models
+- **Comprehensive Test Suite** - 80+ tests with extensive coverage including forecasting
 
 ## Limitations
 

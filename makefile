@@ -39,3 +39,16 @@ fmt:                                              ## black .
 
 clean:                                            ## Delete venv & .python-version
 	@pyenv virtualenv-delete -f $(VENV_NAME) || true
+
+# Time-series forecasting targets
+ingest:                                           ## Ingest daily Canvas data
+	pyenv exec python src/ingest_daily.py
+
+forecast:                                         ## Generate forecasts from existing data
+	pyenv exec python src/forecast_quiet_dates.py --forecast-only
+
+forecast-full:                                    ## Full pipeline: ingest data and forecast
+	pyenv exec python src/forecast_quiet_dates.py
+
+sample-data:                                      ## Create sample data for testing
+	pyenv exec python src/forecast_quiet_dates.py --create-sample-data
