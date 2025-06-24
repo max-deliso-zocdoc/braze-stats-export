@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any
 @dataclass
 class RequestLog:
     """Log entry for API requests."""
+
     timestamp: str
     endpoint: str
     method: str

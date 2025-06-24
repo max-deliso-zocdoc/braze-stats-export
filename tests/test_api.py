@@ -135,14 +135,19 @@ class TestBrazeAPIClient:
         mock_make_request.return_value = mock_response
 
         # Call method
-        result = self.client.get_canvas_list(limit=50)
+        result = self.client.get_canvas_list(include_archived=True, sort_direction="asc")
 
         # Assertions
         assert isinstance(result, CanvasListResponse)
         assert len(result.canvases) == 1
         assert result.canvases[0].id == 'canvas-1'
         assert result.message == 'success'
-        mock_make_request.assert_called_once_with("/canvas/list", limit=50)
+
+        # Should be called multiple times due to pagination, check first call
+        first_call = mock_make_request.call_args_list[0]
+        assert first_call[1]['page'] == 0
+        assert first_call[1]['include_archived'] == True
+        assert first_call[1]['sort_direction'] == "asc"
 
     @patch.object(BrazeAPIClient, '_make_request')
     def test_get_canvas_details(self, mock_make_request):

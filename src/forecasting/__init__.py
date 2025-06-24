@@ -1,5 +1,13 @@
-"""Forecasting and regression analysis for Canvas quiet date prediction."""
+"""Forecasting models for Canvas analytics."""
 
-from .linear_decay import LinearDecayForecaster, QuietDatePredictor
+from .linear_decay import StepBasedForecaster, QuietDatePredictor
+from .advanced_models import AdvancedForecaster, AdvancedForecastResult
+from .enhanced_predictor import EnhancedQuietDatePredictor
 
-__all__ = ['LinearDecayForecaster', 'QuietDatePredictor']
+__all__ = [
+    "StepBasedForecaster",
+    "QuietDatePredictor",
+    "AdvancedForecaster",
+    "AdvancedForecastResult",
+    "EnhancedQuietDatePredictor",
+]

@@ -2,4 +2,4 @@
 
 from .client import BrazeAPIClient
 
-__all__ = ['BrazeAPIClient']
+__all__ = ["BrazeAPIClient"]

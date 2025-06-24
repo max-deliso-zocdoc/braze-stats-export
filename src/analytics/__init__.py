@@ -2,4 +2,4 @@
 
 from .statistics import CanvasStatistics
 
-__all__ = ['CanvasStatistics']
+__all__ = ["CanvasStatistics"]

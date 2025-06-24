@@ -6,16 +6,16 @@ from .canvas import (
     CanvasVariant,
     CanvasStepPath,
     CanvasStep,
-    CanvasDetails
+    CanvasDetails,
 )
 from .request_log import RequestLog
 
 __all__ = [
-    'Canvas',
-    'CanvasListResponse',
-    'CanvasVariant',
-    'CanvasStepPath',
-    'CanvasStep',
-    'CanvasDetails',
-    'RequestLog'
+    "Canvas",
+    "CanvasListResponse",
+    "CanvasVariant",
+    "CanvasStepPath",
+    "CanvasStep",
+    "CanvasDetails",
+    "RequestLog",
 ]

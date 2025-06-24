@@ -9,6 +9,9 @@ Usage:
 
     # Ingest specific date range
     BRAZE_REST_KEY=your-key python src/ingest_historical.py --start-date 2023-11-01 --end-date 2023-12-31
+
+    # Ingest only canvases with names starting with "Campaign"
+    BRAZE_REST_KEY=your-key python src/ingest_historical.py --days 30 --filter-prefix Campaign
 """
 
 import argparse
@@ -36,11 +39,11 @@ DATA_DIR.mkdir(exist_ok=True)
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler('braze_historical_ingest.log'),
-        logging.StreamHandler()
-    ]
+        logging.FileHandler("braze_historical_ingest.log"),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -51,74 +54,117 @@ def get_api_config():
     if not api_key:
         raise ValueError("BRAZE_REST_KEY environment variable is required")
 
-    return {
-        "api_key": api_key,
-        "headers": {"Authorization": f"Bearer {api_key}"}
-    }
+    return {"api_key": api_key, "headers": {"Authorization": f"Bearer {api_key}"}}
 
 
-def get_canvas_ids() -> List[str]:
+def get_canvas_ids(filter_prefix: str = None) -> List[str]:
     """Fetch all Canvas IDs from the Braze API with pagination support."""
     api_config = get_api_config()
     headers = api_config["headers"]
 
     ids = []
-    url = f"{BRAZE_ENDPOINT}/canvas/list"
-    params = {"limit": 100}
+    page = 0
+    limit = 100
 
-    logger.info("Fetching Canvas IDs...")
+    logger.info("Fetching Canvas IDs (excluding archived, newest first)...")
+    if filter_prefix:
+        logger.info(f"Filtering canvases by name prefix: '{filter_prefix}'")
 
     while True:
-        logger.debug(f"Requesting: {url} with params: {params}")
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        params = {
+            "page": page,
+            "limit": limit,
+            "include_archived": "false",  # Exclude archived canvases
+            "sort_direction": "desc",  # Newest first
+        }
+
+        logger.debug(f"Requesting page {page} with params: {params}")
+        resp = requests.get(
+            f"{BRAZE_ENDPOINT}/canvas/list", headers=headers, params=params, timeout=10
+        )
         resp.raise_for_status()
         data = resp.json()
 
         canvas_batch = data.get("canvases", [])
-        ids.extend(c["id"] for c in canvas_batch)
-        logger.debug(f"Retrieved {len(canvas_batch)} Canvas IDs (total: {len(ids)})")
 
-        # Check for pagination
-        next_page = data.get("next_page")
-        if next_page is None:
+        # Filter by prefix if specified
+        if filter_prefix:
+            filtered_batch = [
+                c
+                for c in canvas_batch
+                if c.get("name", "").lower().startswith(filter_prefix.lower())
+            ]
+            ids.extend(c["id"] for c in filtered_batch)
+            logger.debug(
+                f"Retrieved {len(filtered_batch)} Canvas IDs from page {page} (filtered from {len(canvas_batch)})"
+            )
+        else:
+            ids.extend(c["id"] for c in canvas_batch)
+            logger.debug(
+                f"Retrieved {len(canvas_batch)} Canvas IDs from page {page} (total: {len(ids)})"
+            )
+
+        # Check if we got fewer canvases than the limit, indicating last page
+        if len(canvas_batch) < limit:
             break
-        url = f"{BRAZE_ENDPOINT}{next_page}"
-        params = {}  # Clear params for paginated requests
 
-    logger.info(f"Found {len(ids)} total Canvas IDs")
+        page += 1
+
+    logger.info(f"Found {len(ids)} total active Canvas IDs (newest first)")
+    if filter_prefix:
+        logger.info(f"After filtering by prefix '{filter_prefix}': {len(ids)} canvases")
     return ids
 
 
-def get_canvas_name_mapping() -> Dict[str, str]:
+def get_canvas_name_mapping(filter_prefix: str = None) -> Dict[str, str]:
     """Get a mapping of Canvas ID to Canvas name for better logging."""
     api_config = get_api_config()
     headers = api_config["headers"]
 
     name_map = {}
-    url = f"{BRAZE_ENDPOINT}/canvas/list"
-    params = {"limit": 100}
+    page = 0
+    limit = 100
 
     while True:
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        params = {
+            "page": page,
+            "limit": limit,
+            "include_archived": "false",  # Exclude archived canvases
+            "sort_direction": "desc",  # Newest first
+        }
+
+        resp = requests.get(
+            f"{BRAZE_ENDPOINT}/canvas/list", headers=headers, params=params, timeout=10
+        )
         resp.raise_for_status()
         data = resp.json()
 
-        for canvas in data.get("canvases", []):
-            name_map[canvas["id"]] = canvas["name"]
+        canvas_batch = data.get("canvases", [])
 
-        next_page = data.get("next_page")
-        if next_page is None:
+        # Filter by prefix if specified
+        if filter_prefix:
+            for canvas in canvas_batch:
+                if canvas.get("name", "").lower().startswith(filter_prefix.lower()):
+                    name_map[canvas["id"]] = canvas["name"]
+        else:
+            for canvas in canvas_batch:
+                name_map[canvas["id"]] = canvas["name"]
+
+        # Check if we got fewer canvases than the limit, indicating last page
+        if len(canvas_batch) < limit:
             break
-        url = f"{BRAZE_ENDPOINT}{next_page}"
-        params = {}
+
+        page += 1
 
     return name_map
 
 
 @retry(wait=wait_exponential(min=1, max=30), stop=stop_after_attempt(3))
-def get_canvas_data_chunk(canvas_id: str, chunk_start: str, chunk_end: str) -> List[Dict[str, Any]]:
+def get_canvas_data_chunk(
+    canvas_id: str, chunk_start: str, chunk_end: str
+) -> List[Dict[str, Any]]:
     """
-    Fetch a chunk of Canvas data series (≤13 days due to API limits).
+    Fetch a chunk of Canvas data series (≤13 days due to API limits) with step breakdown.
 
     Args:
         canvas_id: Canvas ID
@@ -126,20 +172,22 @@ def get_canvas_data_chunk(canvas_id: str, chunk_start: str, chunk_end: str) -> L
         chunk_end: End date in YYYY-MM-DD format
 
     Returns:
-        List of daily statistics dictionaries
+        List of daily statistics dictionaries with step-level breakdown
     """
     api_config = get_api_config()
     headers = api_config["headers"]
 
     # Calculate the number of days to fetch
-    start_dt = dt.datetime.strptime(chunk_start, '%Y-%m-%d').date()
-    end_dt = dt.datetime.strptime(chunk_end, '%Y-%m-%d').date()
+    start_dt = dt.datetime.strptime(chunk_start, "%Y-%m-%d").date()
+    end_dt = dt.datetime.strptime(chunk_end, "%Y-%m-%d").date()
     length = (end_dt - start_dt).days + 1
 
     if length > 13:
         raise ValueError(f"Chunk too large: {length} days. Braze API limit is 13 days.")
 
-    logger.debug(f"Fetching {length} days of data for Canvas {canvas_id} from {chunk_start} to {chunk_end}")
+    logger.debug(
+        f"Fetching {length} days of data for Canvas {canvas_id} from {chunk_start} to {chunk_end}"
+    )
 
     try:
         resp = requests.get(
@@ -148,7 +196,9 @@ def get_canvas_data_chunk(canvas_id: str, chunk_start: str, chunk_end: str) -> L
             params={
                 "canvas_id": canvas_id,
                 "length": length,
-                "ending_at": chunk_end
+                "ending_at": chunk_end,
+                "include_step_breakdown": "true",
+                "include_variant_breakdown": "true",
             },
             timeout=30,
         )
@@ -158,7 +208,7 @@ def get_canvas_data_chunk(canvas_id: str, chunk_start: str, chunk_end: str) -> L
         error_msg = "Unknown error"
         status_code = "Unknown"
         try:
-            if hasattr(e, 'response') and e.response is not None:
+            if hasattr(e, "response") and e.response is not None:
                 status_code = e.response.status_code
                 error_msg = e.response.text
         except AttributeError:
@@ -172,11 +222,17 @@ def get_canvas_data_chunk(canvas_id: str, chunk_start: str, chunk_end: str) -> L
     api_data = resp.json()
 
     # Handle empty or malformed responses
-    if "data" not in api_data or "stats" not in api_data["data"] or not api_data["data"]["stats"]:
-        logger.debug(f"No data returned for Canvas {canvas_id} chunk {chunk_start} to {chunk_end}")
+    if (
+        "data" not in api_data
+        or "stats" not in api_data["data"]
+        or not api_data["data"]["stats"]
+    ):
+        logger.debug(
+            f"No data returned for Canvas {canvas_id} chunk {chunk_start} to {chunk_end}"
+        )
         return []
 
-    # Process and normalize each day's data
+    # Process and normalize each day's data with step breakdown
     normalized_data = []
     stats_array = api_data["data"]["stats"]
 
@@ -184,31 +240,54 @@ def get_canvas_data_chunk(canvas_id: str, chunk_start: str, chunk_end: str) -> L
     for stat_item in stats_array:
         time_str = stat_item.get("time", "")
         total_stats = stat_item.get("total_stats", {})
+        step_stats = stat_item.get("step_stats", {})
 
         # Parse the date from the time field
         try:
-            stat_date = dt.datetime.strptime(time_str, '%Y-%m-%d').date()
+            stat_date = dt.datetime.strptime(time_str, "%Y-%m-%d").date()
         except ValueError:
             logger.warning(f"Invalid date format in API response: {time_str}")
             continue
 
+        # Create the normalized record with step breakdown
         normalized_record = {
             "date": stat_date.isoformat(),
-            "entries": total_stats.get("entries", 0),
-            "sends": total_stats.get("sends", 0),
-            "delivered": total_stats.get("delivered", 0),
-            "opens": total_stats.get("opens", 0),
-            "conversions": total_stats.get("conversions", 0),
-            "revenue": total_stats.get("revenue", 0.0)
+            "total_stats": {
+                "entries": total_stats.get("entries", 0),
+                "revenue": total_stats.get("revenue", 0.0),
+                "conversions": total_stats.get("conversions", 0),
+                "conversions_by_entry_time": total_stats.get(
+                    "conversions_by_entry_time", 0
+                ),
+            },
+            "step_stats": {},
         }
+
+        # Process step-level statistics
+        for step_id, step_data in step_stats.items():
+            step_info = {
+                "name": step_data.get("name", "Unknown"),
+                "revenue": step_data.get("revenue", 0.0),
+                "conversions": step_data.get("conversions", 0),
+                "conversions_by_entry_time": step_data.get(
+                    "conversions_by_entry_time", 0
+                ),
+                "unique_recipients": step_data.get("unique_recipients", 0),
+                "messages": step_data.get("messages", {}),
+            }
+            normalized_record["step_stats"][step_id] = step_info
 
         normalized_data.append(normalized_record)
 
-    logger.debug(f"Processed {len(normalized_data)} days of data for Canvas {canvas_id}")
+    logger.debug(
+        f"Processed {len(normalized_data)} days of data for Canvas {canvas_id}"
+    )
     return normalized_data
 
 
-def get_canvas_data_series(canvas_id: str, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+def get_canvas_data_series(
+    canvas_id: str, start_date: str, end_date: str
+) -> List[Dict[str, Any]]:
     """
     Fetch historical data series for a Canvas ID, breaking large ranges into chunks.
 
@@ -220,11 +299,13 @@ def get_canvas_data_series(canvas_id: str, start_date: str, end_date: str) -> Li
     Returns:
         List of daily statistics dictionaries
     """
-    start_dt = dt.datetime.strptime(start_date, '%Y-%m-%d').date()
-    end_dt = dt.datetime.strptime(end_date, '%Y-%m-%d').date()
+    start_dt = dt.datetime.strptime(start_date, "%Y-%m-%d").date()
+    end_dt = dt.datetime.strptime(end_date, "%Y-%m-%d").date()
     total_days = (end_dt - start_dt).days + 1
 
-    logger.debug(f"Fetching {total_days} days of data for Canvas {canvas_id}, breaking into chunks")
+    logger.debug(
+        f"Fetching {total_days} days of data for Canvas {canvas_id}, breaking into chunks"
+    )
 
     all_data = []
     chunk_size = 13  # Maximum allowed by Braze API
@@ -239,15 +320,21 @@ def get_canvas_data_series(canvas_id: str, start_date: str, end_date: str) -> Li
         chunk_end_str = chunk_end.isoformat()
 
         try:
-            chunk_data = get_canvas_data_chunk(canvas_id, chunk_start_str, chunk_end_str)
+            chunk_data = get_canvas_data_chunk(
+                canvas_id, chunk_start_str, chunk_end_str
+            )
             all_data.extend(chunk_data)
-            logger.debug(f"✓ Successfully fetched chunk {chunk_start_str} to {chunk_end_str} for Canvas {canvas_id}: {len(chunk_data)} records")
+            logger.debug(
+                f"✓ Successfully fetched chunk {chunk_start_str} to {chunk_end_str} for Canvas {canvas_id}: {len(chunk_data)} records"
+            )
 
             # Small delay between chunks to be gentle on the API
             time.sleep(0.1)
 
         except Exception as e:
-            logger.warning(f"✗ Failed to fetch chunk {chunk_start_str} to {chunk_end_str} for Canvas {canvas_id}: {type(e).__name__}: {e}")
+            logger.warning(
+                f"✗ Failed to fetch chunk {chunk_start_str} to {chunk_end_str} for Canvas {canvas_id}: {type(e).__name__}: {e}"
+            )
 
         # Move to next chunk
         current_start = chunk_end + dt.timedelta(days=1)
@@ -255,69 +342,135 @@ def get_canvas_data_series(canvas_id: str, start_date: str, end_date: str) -> Li
     # Sort by date (oldest first) for consistent order
     all_data.sort(key=lambda x: x["date"])
 
-    logger.debug(f"Fetched total of {len(all_data)} days of data for Canvas {canvas_id}")
+    logger.debug(
+        f"Fetched total of {len(all_data)} days of data for Canvas {canvas_id}"
+    )
     return all_data
 
 
 def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> int:
     """
-    Append historical records to a Canvas JSONL file, avoiding duplicates.
+    Append historical records to Canvas step-based directory structure.
 
     Args:
         canvas_id: Canvas ID
-        daily_records: List of daily statistics dictionaries
+        daily_records: List of daily statistics dictionaries with step breakdown
 
     Returns:
-        Number of new records added
+        Number of new records added across all steps
     """
-    jsonl_path = DATA_DIR / f"{canvas_id}.jsonl"
+    canvas_dir = DATA_DIR / canvas_id
+    total_new_records = 0
 
-    # Read existing dates to avoid duplicates
-    existing_dates = set()
-    if jsonl_path.exists():
-        with jsonl_path.open('r') as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        existing_record = json.loads(line)
-                        existing_dates.add(existing_record.get("date"))
-                    except json.JSONDecodeError:
-                        logger.warning(f"Skipping malformed line in {jsonl_path}")
-                        continue
-
-    # Filter out records that already exist
-    new_records = [record for record in daily_records if record["date"] not in existing_dates]
-
-    if not new_records:
-        logger.debug(f"No new records to add for Canvas {canvas_id}")
+    if not daily_records:
+        logger.debug(f"No records to process for Canvas {canvas_id}")
         return 0
 
-    # Append new records
-    with jsonl_path.open('a') as f:
-        for record in new_records:
-            f.write(json.dumps(record) + '\n')
+    # Create canvas directory if it doesn't exist
+    canvas_dir.mkdir(exist_ok=True)
 
-    logger.debug(f"Added {len(new_records)} new records for Canvas {canvas_id}")
-    return len(new_records)
+    # Process each day's data
+    for record in daily_records:
+        date = record["date"]
+        step_stats = record.get("step_stats", {})
+
+        # Process each step
+        for step_id, step_data in step_stats.items():
+            step_dir = canvas_dir / step_id
+            step_dir.mkdir(exist_ok=True)
+
+            # Create step metadata file if it doesn't exist
+            step_metadata_file = step_dir / "metadata.json"
+            if not step_metadata_file.exists():
+                metadata = {
+                    "step_id": step_id,
+                    "step_name": step_data.get("name", "Unknown"),
+                    "canvas_id": canvas_id,
+                    "created_at": dt.datetime.now().isoformat(),
+                }
+                with step_metadata_file.open("w") as f:
+                    json.dump(metadata, f, indent=2)
+
+            # Process each message channel
+            messages = step_data.get("messages", {})
+            for channel, channel_data in messages.items():
+                if not isinstance(channel_data, list) or not channel_data:
+                    continue
+
+                channel_file = step_dir / f"{channel}.jsonl"
+
+                # Read existing dates to avoid duplicates
+                existing_dates = set()
+                if channel_file.exists():
+                    with channel_file.open("r") as f:
+                        for line in f:
+                            if line.strip():
+                                try:
+                                    existing_record = json.loads(line)
+                                    existing_dates.add(existing_record.get("date"))
+                                except json.JSONDecodeError:
+                                    logger.warning(
+                                        f"Skipping malformed line in {channel_file}"
+                                    )
+                                    continue
+
+                # Skip if this date already exists for this channel
+                if date in existing_dates:
+                    logger.debug(
+                        f"Data for {canvas_id}/{step_id}/{channel} on {date} already exists, skipping"
+                    )
+                    continue
+
+                # Prepare the channel record
+                channel_record = {
+                    "date": date,
+                    "step_id": step_id,
+                    "step_name": step_data.get("name", "Unknown"),
+                    "canvas_id": canvas_id,
+                    "channel": channel,
+                }
+
+                # Add all the message metrics
+                if len(channel_data) > 0:
+                    metrics = channel_data[
+                        0
+                    ]  # Usually first element contains the metrics
+                    channel_record.update(metrics)
+
+                # Append the new record
+                with channel_file.open("a") as f:
+                    f.write(json.dumps(channel_record) + "\n")
+
+                total_new_records += 1
+                logger.debug(
+                    f"Added record for {canvas_id}/{step_id}/{channel} on {date}"
+                )
+
+    return total_new_records
 
 
-def ingest_historical_data(start_date: str, end_date: str) -> None:
+def ingest_historical_data(start_date: str, end_date: str, filter_prefix: str = None) -> None:
     """
     Main function to ingest historical data for all Canvas IDs.
 
     Args:
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
+        filter_prefix: Optional prefix to filter Canvas names (case-insensitive)
     """
-    logger.info(f"Starting historical Canvas data ingestion from {start_date} to {end_date}")
+    logger.info(
+        f"Starting historical Canvas data ingestion from {start_date} to {end_date}"
+    )
+    if filter_prefix:
+        logger.info(f"Filtering canvases by name prefix: '{filter_prefix}'")
 
     try:
         # Get Canvas IDs and names
-        canvas_ids = get_canvas_ids()
+        canvas_ids = get_canvas_ids(filter_prefix)
         logger.info(f"Processing {len(canvas_ids)} Canvas IDs")
 
         # Get name mapping for better reporting
-        name_mapping = get_canvas_name_mapping()
+        name_mapping = get_canvas_name_mapping(filter_prefix)
 
         success_count = 0
         partial_success_count = 0
@@ -337,23 +490,31 @@ def ingest_historical_data(start_date: str, end_date: str) -> None:
                     total_records_added += records_added
 
                     # Calculate expected vs actual records to detect partial failures
-                    start_dt = dt.datetime.strptime(start_date, '%Y-%m-%d').date()
-                    end_dt = dt.datetime.strptime(end_date, '%Y-%m-%d').date()
+                    start_dt = dt.datetime.strptime(start_date, "%Y-%m-%d").date()
+                    end_dt = dt.datetime.strptime(end_date, "%Y-%m-%d").date()
                     expected_days = (end_dt - start_dt).days + 1
 
                     if len(daily_records) == expected_days:
                         success_count += 1
-                        logger.info(f"✓ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_added:3} new records | {len(daily_records):3}/{expected_days} days (complete)")
+                        logger.info(
+                            f"✓ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_added:3} new records | {len(daily_records):3}/{expected_days} days (complete)"
+                        )
                     else:
                         partial_success_count += 1
-                        logger.warning(f"◐ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_added:3} new records | {len(daily_records):3}/{expected_days} days (partial)")
+                        logger.warning(
+                            f"◐ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_added:3} new records | {len(daily_records):3}/{expected_days} days (partial)"
+                        )
                 else:
                     error_count += 1
-                    logger.warning(f"◯ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | No data available")
+                    logger.warning(
+                        f"◯ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | No data available"
+                    )
 
             except Exception as exc:
                 error_count += 1
-                logger.error(f"⚠ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | Unexpected error: {type(exc).__name__}: {exc}")
+                logger.error(
+                    f"⚠ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | Unexpected error: {type(exc).__name__}: {exc}"
+                )
 
             finally:
                 # Rate limiting and progress updates
@@ -361,8 +522,12 @@ def ingest_historical_data(start_date: str, end_date: str) -> None:
 
                 # Progress update every 10 canvases
                 if i % 10 == 0:
-                    total_processed = success_count + partial_success_count + error_count
-                    logger.info(f"Progress: {i}/{len(canvas_ids)} processed | ✓ {success_count} complete | ◐ {partial_success_count} partial | ✗ {error_count} failed")
+                    total_processed = (
+                        success_count + partial_success_count + error_count
+                    )
+                    logger.info(
+                        f"Progress: {i}/{len(canvas_ids)} processed | ✓ {success_count} complete | ◐ {partial_success_count} partial | ✗ {error_count} failed"
+                    )
 
         # Summary
         logger.info(f"Historical ingestion complete:")
@@ -389,29 +554,31 @@ Examples:
 
   # Ingest specific date range
   BRAZE_REST_KEY=your-key python src/ingest_historical.py --start-date 2023-11-01 --end-date 2023-12-31
-        """
+
+  # Ingest only canvases with names starting with "Campaign"
+  BRAZE_REST_KEY=your-key python src/ingest_historical.py --days 30 --filter-prefix Campaign
+
+  # Ingest specific date range with filter
+  BRAZE_REST_KEY=your-key python src/ingest_historical.py --start-date 2023-11-01 --end-date 2023-12-31 --filter-prefix "Weekly"
+        """,
     )
 
     parser.add_argument(
-        '--days',
+        "--days",
         type=int,
-        help='Number of days back from today to ingest (e.g., 60 for last 60 days)'
+        help="Number of days back from today to ingest (e.g., 60 for last 60 days)",
     )
 
-    parser.add_argument(
-        '--start-date',
-        help='Start date in YYYY-MM-DD format'
-    )
+    parser.add_argument("--start-date", help="Start date in YYYY-MM-DD format")
+
+    parser.add_argument("--end-date", help="End date in YYYY-MM-DD format")
+
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
     parser.add_argument(
-        '--end-date',
-        help='End date in YYYY-MM-DD format'
-    )
-
-    parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Enable verbose logging'
+        "--filter-prefix",
+        type=str,
+        help="Only ingest canvases whose names start with this prefix (case-insensitive)"
     )
 
     args = parser.parse_args()
@@ -445,14 +612,14 @@ Examples:
 
         # Validate date formats
         try:
-            dt.datetime.strptime(start_date_str, '%Y-%m-%d')
-            dt.datetime.strptime(end_date_str, '%Y-%m-%d')
+            dt.datetime.strptime(start_date_str, "%Y-%m-%d")
+            dt.datetime.strptime(end_date_str, "%Y-%m-%d")
         except ValueError as e:
             logger.error(f"Invalid date format: {e}")
             sys.exit(1)
 
     try:
-        ingest_historical_data(start_date_str, end_date_str)
+        ingest_historical_data(start_date_str, end_date_str, args.filter_prefix)
         logger.info("✅ Historical ingestion completed successfully!")
 
     except KeyboardInterrupt:

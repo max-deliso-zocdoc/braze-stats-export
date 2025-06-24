@@ -1,41 +1,44 @@
 """Canvas Quiet Date Forecasting Tool.
 
-This script combines daily data ingestion and regression analysis to predict
+This script analyzes existing Canvas data using regression analysis to predict
 when Canvas sends will decay to approximately zero (the "quiet date").
 
+Note: Daily ingestion functionality has been removed. Use ingest_historical.py
+for data collection.
+
 Usage:
-    # Ingest data and generate forecasts
-    BRAZE_REST_KEY=your-key python src/forecast_quiet_dates.py
+    # Generate forecasts from existing data
+    python src/forecast_quiet_dates.py
 
-    # Only run forecasting (skip ingestion)
-    python src/forecast_quiet_dates.py --forecast-only
-
-    # Ingest specific date
-    BRAZE_REST_KEY=your-key python src/forecast_quiet_dates.py --date 2023-12-15
+    # Create sample data for testing
+    python src/forecast_quiet_dates.py --create-sample-data
 """
 
 import argparse
+import datetime as dt
 import json
 import logging
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
+from typing import Final, List, Dict, Any
+import time
 
-# Add src to Python path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+import requests
+from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-from forecasting import QuietDatePredictor
-from ingest_daily import main as ingest_main
+
+from .forecasting.linear_decay import QuietDatePredictor
+
+# Load environment variables
+load_dotenv()
 
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('braze_forecast.log'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("braze_forecast.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
@@ -43,10 +46,10 @@ logger = logging.getLogger(__name__)
 def save_forecast_report(report: dict, filename: str = None) -> None:
     """Save forecast report to JSON file."""
     if filename is None:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"forecast_report_{timestamp}.json"
 
-    with open(filename, 'w') as f:
+    with open(filename, "w") as f:
         json.dump(report, f, indent=2, default=str)
 
     logger.info(f"Forecast report saved to {filename}")
@@ -54,14 +57,14 @@ def save_forecast_report(report: dict, filename: str = None) -> None:
 
 def print_forecast_summary(report: dict) -> None:
     """Print a human-readable summary of the forecast report."""
-    summary = report['summary']
-    trends = report['trends']
-    confidence = report['confidence_distribution']
-    urgent = report['urgent_canvases']
+    summary = report["summary"]
+    trends = report["trends"]
+    confidence = report["confidence_distribution"]
+    all_canvases = report.get("all_canvases", [])
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
     print("🔮 CANVAS QUIET DATE FORECAST REPORT")
-    print("="*70)
+    print("=" * 70)
 
     print(f"\n📊 OVERVIEW:")
     print(f"  • Total Canvases Analyzed: {summary['total_canvases']}")
@@ -73,11 +76,11 @@ def print_forecast_summary(report: dict) -> None:
     print(f"\n📈 CURRENT TRENDS:")
     for trend, count in trends.items():
         trend_emoji = {
-            'declining': '📉',
-            'stable': '📊',
-            'growing': '📈',
-            'insufficient_data': '❓'
-        }.get(trend, '❔')
+            "declining": "📉",
+            "stable": "📊",
+            "growing": "📈",
+            "insufficient_data": "❓",
+        }.get(trend, "❔")
         print(f"  {trend_emoji} {trend.replace('_', ' ').title()}: {count}")
 
     print(f"\n🎯 PREDICTION CONFIDENCE:")
@@ -85,20 +88,32 @@ def print_forecast_summary(report: dict) -> None:
     print(f"  • Medium (40-70%): {confidence['medium']}")
     print(f"  • Low (<40%): {confidence['low']}")
 
-    if urgent:
-        print(f"\n⚠️  URGENT: CANVASES GOING QUIET SOON")
-        print("   Canvas ID" + " "*25 + "Quiet Date    Days  Confidence  Trend")
-        print("   " + "-"*65)
-        for canvas in urgent:
-            canvas_id = canvas['canvas_id'][:35]
-            quiet_date = canvas['quiet_date'][:10] if canvas['quiet_date'] else 'Unknown'
-            days = str(canvas['days_to_quiet']) if canvas['days_to_quiet'] else 'N/A'
+    # Filter canvases with predicted quiet dates and sort by quiet date (ascending)
+    predictable_canvases = [
+        canvas for canvas in all_canvases if canvas.get("quiet_date")
+    ]
+    predictable_canvases.sort(key=lambda x: x.get("quiet_date", "9999-12-31"))
+
+    if predictable_canvases:
+        print(f"\n📅 PREDICTED QUIET DATES (Sorted by Quiet Date)")
+        print(
+            "   Canvas Name                                                  Quiet Date     Days  Confidence  Trend"
+        )
+        print("   " + "-" * 105)
+        for canvas in predictable_canvases:
+            canvas_name = canvas.get("canvas_name", canvas["canvas_id"])[:60]
+            quiet_date = (
+                canvas["quiet_date"][:10] if canvas["quiet_date"] else "Unknown"
+            )
+            days = str(canvas["days_to_quiet"]) if canvas["days_to_quiet"] else "N/A"
             confidence = f"{canvas['confidence']:.1%}"
-            trend = canvas['trend'][:10]
+            trend = canvas["trend"][:10]
 
-            print(f"   {canvas_id:35} {quiet_date:10} {days:4}  {confidence:9}  {trend}")
+            print(
+                f"   {canvas_name:60} {quiet_date:10}  {days:>4}  {confidence:9}  {trend:10}"
+            )
 
-    print("\n" + "="*70)
+    print("\n" + "=" * 70)
 
 
 def create_sample_data() -> None:
@@ -115,7 +130,7 @@ def create_sample_data() -> None:
     sample_canvases = [
         {"id": "sample-declining-canvas", "initial_sends": 1000, "trend": "declining"},
         {"id": "sample-stable-canvas", "initial_sends": 500, "trend": "stable"},
-        {"id": "sample-growing-canvas", "initial_sends": 200, "trend": "growing"}
+        {"id": "sample-growing-canvas", "initial_sends": 200, "trend": "growing"},
     ]
 
     base_date = date.today() - timedelta(days=30)
@@ -127,16 +142,20 @@ def create_sample_data() -> None:
 
         jsonl_path = data_dir / f"{canvas_id}.jsonl"
 
-        with jsonl_path.open('w') as f:
+        with jsonl_path.open("w") as f:
             for i in range(30):  # 30 days of data
                 current_date = base_date + timedelta(days=i)
 
                 if trend == "declining":
-                    sends = max(0, int(initial_sends * (1 - i * 0.05) + random.randint(-50, 50)))
+                    sends = max(
+                        0, int(initial_sends * (1 - i * 0.05) + random.randint(-50, 50))
+                    )
                 elif trend == "stable":
                     sends = max(0, int(initial_sends + random.randint(-100, 100)))
                 else:  # growing
-                    sends = max(0, int(initial_sends * (1 + i * 0.02) + random.randint(-30, 30)))
+                    sends = max(
+                        0, int(initial_sends * (1 + i * 0.02) + random.randint(-30, 30))
+                    )
 
                 entries = int(sends * 1.05 + random.randint(0, 20))
                 delivered = int(sends * 0.95 + random.randint(-10, 10))
@@ -149,10 +168,10 @@ def create_sample_data() -> None:
                     "sends": max(0, sends),
                     "delivered": max(0, delivered),
                     "opens": max(0, opens),
-                    "conversions": max(0, conversions)
+                    "conversions": max(0, conversions),
                 }
 
-                f.write(json.dumps(record) + '\n')
+                f.write(json.dumps(record) + "\n")
 
         logger.info(f"Created sample data for {canvas_id} ({trend} trend)")
 
@@ -164,53 +183,47 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full pipeline: ingest data and forecast
-  BRAZE_REST_KEY=your-key python src/forecast_quiet_dates.py
-
-  # Only run forecasting
-  python src/forecast_quiet_dates.py --forecast-only
-
-  # Ingest specific date
-  BRAZE_REST_KEY=your-key python src/forecast_quiet_dates.py --date 2023-12-15
+  # Generate forecasts from existing data
+  python src/forecast_quiet_dates.py
 
   # Create sample data for testing
   python src/forecast_quiet_dates.py --create-sample-data
-        """
+
+  # Forecast only transactional canvases
+  python src/forecast_quiet_dates.py --filter-prefix "transactional"
+
+  # Forecast canvases starting with specific prefix
+  python src/forecast_quiet_dates.py --filter-prefix "welcome" --verbose
+        """,
     )
 
     parser.add_argument(
-        '--forecast-only',
-        action='store_true',
-        help='Skip data ingestion and only run forecasting'
+        "--forecast-only",
+        action="store_true",
+        help="(Deprecated - daily ingestion removed) Run forecasting on existing data",
     )
 
     parser.add_argument(
-        '--date',
-        help='Specific date to ingest (YYYY-MM-DD format)'
-    )
-
-    parser.add_argument(
-        '--quiet-threshold',
+        "--quiet-threshold",
         type=int,
         default=5,
-        help='Daily sends below this threshold are considered "quiet" (default: 5)'
+        help='Daily sends below this threshold are considered "quiet" (default: 5)',
     )
 
-    parser.add_argument(
-        '--output',
-        help='Output filename for forecast report JSON'
-    )
+    parser.add_argument("--output", help="Output filename for forecast report JSON")
 
     parser.add_argument(
-        '--create-sample-data',
-        action='store_true',
-        help='Create sample time-series data for testing'
+        "--create-sample-data",
+        action="store_true",
+        help="Create sample time-series data for testing",
     )
 
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+
     parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Enable verbose logging'
+        "--filter-prefix",
+        type=str,
+        help="Only analyze canvases whose names start with this prefix (case-insensitive)",
     )
 
     args = parser.parse_args()
@@ -225,34 +238,35 @@ Examples:
             print("✅ Sample data created successfully!")
             return
 
-        # Step 1: Data Ingestion (unless skipped)
-        if not args.forecast_only:
-            if not os.environ.get("BRAZE_REST_KEY"):
-                logger.error("BRAZE_REST_KEY environment variable is required for data ingestion")
-                sys.exit(1)
-
-            logger.info("🔄 Starting data ingestion...")
-            try:
-                ingest_main(args.date)
-                logger.info("✅ Data ingestion completed")
-            except Exception as e:
-                logger.error(f"❌ Data ingestion failed: {e}")
-                # Continue with forecasting using existing data
-                logger.info("Continuing with forecasting using existing data...")
-
-        # Step 2: Forecasting
+        # Forecasting (daily ingestion has been removed)
         logger.info("🔮 Starting quiet date forecasting...")
 
         data_dir = Path("data")
-        if not data_dir.exists() or not list(data_dir.glob("*.jsonl")):
-            logger.error("No time-series data found. Run data ingestion first or use --create-sample-data")
+        if not data_dir.exists():
+            logger.error(
+                "Data directory does not exist. Run data ingestion first or use --create-sample-data"
+            )
             sys.exit(1)
+
+        # Check for hierarchical Canvas directories (new format only)
+        canvas_dirs = [d for d in data_dir.iterdir() if d.is_dir()]
+
+        if not canvas_dirs:
+            logger.error(
+                "No Canvas directories found. Run historical data ingestion first to create step-based data structure"
+            )
+            sys.exit(1)
+
+        logger.info(f"Found {len(canvas_dirs)} Canvas directories with step-based data")
 
         # Run forecasting
         predictor = QuietDatePredictor(
-            data_dir=data_dir,
-            quiet_threshold=args.quiet_threshold
+            data_dir=data_dir, quiet_threshold=args.quiet_threshold
         )
+
+        # Apply canvas name filter if specified
+        if args.filter_prefix:
+            predictor.canvas_name_filter = args.filter_prefix.lower()
 
         report = predictor.generate_forecast_report()
 
