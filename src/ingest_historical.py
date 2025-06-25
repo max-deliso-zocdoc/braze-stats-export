@@ -328,7 +328,8 @@ def get_canvas_data_series(
             )
             all_data.extend(chunk_data)
             logger.debug(
-                f"✓ Successfully fetched chunk {chunk_start_str} to {chunk_end_str} for Canvas {canvas_id}: {len(chunk_data)} records"
+                f"✓ Successfully fetched chunk {chunk_start_str} to {chunk_end_str} for Canvas {canvas_id}: "
+                f"{len(chunk_data)} records"
             )
 
             # Small delay between chunks to be gentle on the API
@@ -336,7 +337,8 @@ def get_canvas_data_series(
 
         except Exception as e:
             logger.warning(
-                f"✗ Failed to fetch chunk {chunk_start_str} to {chunk_end_str} for Canvas {canvas_id}: {type(e).__name__}: {e}"
+                f"✗ Failed to fetch chunk {chunk_start_str} to {chunk_end_str} for Canvas {canvas_id}: "
+                f"{type(e).__name__}: {e}"
             )
 
         # Move to next chunk
@@ -418,7 +420,7 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
                                         records_replaced += 1
                                 except json.JSONDecodeError:
                                     logger.warning(
-                                        f"Skipping malformed line in {channel_file}"
+                                        "Skipping malformed line in {}".format(channel_file)
                                     )
                                     continue
 
@@ -447,11 +449,15 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
                 total_new_records += 1
                 if records_replaced > 0:
                     logger.debug(
-                        f"Updated record for {canvas_id}/{step_id}/{channel} on {date} (replaced {records_replaced} existing record(s))"
+                        "Updated record for {}/{}/{} on {} (replaced {} existing record(s))".format(
+                            canvas_id, step_id, channel, date, records_replaced
+                        )
                     )
                 else:
                     logger.debug(
-                        f"Added new record for {canvas_id}/{step_id}/{channel} on {date}"
+                        "Added new record for {}/{}/{} on {}".format(
+                            canvas_id, step_id, channel, date
+                        )
                     )
 
     return total_new_records
@@ -507,23 +513,31 @@ def ingest_historical_data(
                     if len(daily_records) == expected_days:
                         success_count += 1
                         logger.info(
-                            f"✓ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_processed:3} records processed | {len(daily_records):3}/{expected_days} days (complete)"
+                            "✓ ({}/{}) {:30} | {:3} records processed | {:3}/{:3} days (complete)".format(
+                                i, len(canvas_ids), canvas_name[:30], records_processed,
+                                len(daily_records), expected_days
+                            )
                         )
                     else:
                         partial_success_count += 1
                         logger.warning(
-                            f"◐ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_processed:3} records processed | {len(daily_records):3}/{expected_days} days (partial)"
+                            "◐ ({}/{}) {:30} | {:3} records processed | {:3}/{:3} days (partial)".format(
+                                i, len(canvas_ids), canvas_name[:30], records_processed,
+                                len(daily_records), expected_days
+                            )
                         )
                 else:
                     error_count += 1
                     logger.warning(
-                        f"◯ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | No data available"
+                        "◯ ({}/{}) {:30} | No data available".format(i, len(canvas_ids), canvas_name[:30])
                     )
 
             except Exception as exc:
                 error_count += 1
                 logger.error(
-                    f"⚠ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | Unexpected error: {type(exc).__name__}: {exc}"
+                    "⚠ ({}/{}) {:30} | Unexpected error: {}: {}".format(
+                        i, len(canvas_ids), canvas_name[:30], type(exc).__name__, exc
+                    )
                 )
 
             finally:
@@ -535,15 +549,21 @@ def ingest_historical_data(
                     print("Progress update: processed {} canvases".format(i))
 
         # Summary
-        logger.info(f"Historical ingestion complete:")
-        logger.info(f"  • Complete success: {success_count}")
-        logger.info(f"  • Partial success: {partial_success_count}")
-        logger.info(f"  • Failed: {error_count}")
-        logger.info(f"  • Total records processed: {total_records_processed}")
-        logger.info(f"  • Date range: {start_date} to {end_date}")
+        logger.info("Historical ingestion complete:")
+        logger.info("  • Complete success: {}".format(success_count))
+        logger.info("  • Partial success: {}".format(partial_success_count))
+        logger.info("  • Failed: {}".format(error_count))
+        logger.info("  • Total records processed: {}".format(total_records_processed))
+        logger.info(
+            "  • Date range: {} to {}".format(
+                start_date, end_date
+            )
+        )
 
     except Exception as exc:
-        logger.error(f"Fatal error during historical ingestion: {exc}")
+        logger.error(
+            "Fatal error during historical ingestion: {}".format(exc)
+        )
         raise
 
 
@@ -564,7 +584,8 @@ Examples:
   BRAZE_REST_KEY=your-key python src/ingest_historical.py --days 30 --filter-prefix Campaign
 
   # Ingest specific date range with filter
-  BRAZE_REST_KEY=your-key python src/ingest_historical.py --start-date 2023-11-01 --end-date 2023-12-31 --filter-prefix "Weekly"
+  BRAZE_REST_KEY=your-key python src/ingest_historical.py --start-date 2023-11-01 \
+    --end-date 2023-12-31 --filter-prefix "Weekly"
         """,
     )
 

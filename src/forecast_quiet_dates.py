@@ -83,7 +83,7 @@ def print_forecast_summary(report: dict) -> None:
     predictable_canvases.sort(key=lambda x: x.get("quiet_date", "9999-12-31"))
 
     if predictable_canvases:
-        print(f"\nPREDICTED QUIET DATES (Sorted by Quiet Date)")
+        print("\nPREDICTED QUIET DATES (Sorted by Quiet Date)")
         print(
             "   Canvas Name                                                  Quiet Date     Days  Confidence  Trend"
         )
