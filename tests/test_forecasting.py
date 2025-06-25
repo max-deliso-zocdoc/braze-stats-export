@@ -14,7 +14,7 @@ from src.forecasting.linear_decay import (
     StepBasedForecaster,
     QuietDatePredictor,
     CanvasMetrics,
-    ForecastResult
+    ForecastResult,
 )
 
 
@@ -29,7 +29,7 @@ class TestCanvasMetrics(unittest.TestCase):
             total_sent=95,
             total_delivered=90,
             total_opens=15,
-            total_clicks=2
+            total_clicks=2,
         )
 
         self.assertEqual(stats.date, date(2023, 12, 1))
@@ -52,6 +52,7 @@ class TestStepBasedForecaster(unittest.TestCase):
     def tearDown(self):
         """Clean up test fixtures."""
         import shutil
+
         shutil.rmtree(self.temp_dir)
 
     def _create_test_data(self, canvas_id: str, data_points: list) -> None:
@@ -65,7 +66,7 @@ class TestStepBasedForecaster(unittest.TestCase):
 
         # Create channel file
         channel_file = step_dir / "email.jsonl"
-        with channel_file.open('w') as f:
+        with channel_file.open("w") as f:
             for point in data_points:
                 # Convert test data to the expected format
                 record = {
@@ -77,9 +78,9 @@ class TestStepBasedForecaster(unittest.TestCase):
                     "unique_opens": point.get("opens", 0),
                     "unique_clicks": point.get("conversions", 0),
                     "bounces": 0,
-                    "unsubscribes": 0
+                    "unsubscribes": 0,
                 }
-                f.write(json.dumps(record) + '\n')
+                f.write(json.dumps(record) + "\n")
 
     def test_load_canvas_metrics_success(self):
         """Test successful data loading."""
@@ -91,7 +92,7 @@ class TestStepBasedForecaster(unittest.TestCase):
                 "sends": 95,
                 "delivered": 90,
                 "opens": 15,
-                "conversions": 2
+                "conversions": 2,
             },
             {
                 "date": "2023-12-02",
@@ -99,8 +100,8 @@ class TestStepBasedForecaster(unittest.TestCase):
                 "sends": 85,
                 "delivered": 80,
                 "opens": 12,
-                "conversions": 1
-            }
+                "conversions": 1,
+            },
         ]
 
         self._create_test_data(canvas_id, test_data)
@@ -115,7 +116,9 @@ class TestStepBasedForecaster(unittest.TestCase):
 
     def test_load_canvas_metrics_missing_file(self):
         """Test loading data when file doesn't exist."""
-        canvas_metrics = self.forecaster.load_canvas_metrics("nonexistent", self.data_dir)
+        canvas_metrics = self.forecaster.load_canvas_metrics(
+            "nonexistent", self.data_dir
+        )
         self.assertEqual(len(canvas_metrics), 0)
 
     def test_load_canvas_metrics_malformed_json(self):
@@ -123,9 +126,9 @@ class TestStepBasedForecaster(unittest.TestCase):
         canvas_id = "malformed-canvas"
         jsonl_path = self.data_dir / f"{canvas_id}.jsonl"
 
-        with jsonl_path.open('w') as f:
+        with jsonl_path.open("w") as f:
             f.write('{"date": "2023-12-01", "sends": 95}\n')
-            f.write('malformed json line\n')
+            f.write("malformed json line\n")
             f.write('{"date": "2023-12-02", "sends": 85}\n')
 
         canvas_metrics = self.forecaster.load_canvas_metrics(canvas_id, self.data_dir)
@@ -136,7 +139,7 @@ class TestStepBasedForecaster(unittest.TestCase):
         canvas_id = "insufficient-data"
         test_data = [
             {"date": "2023-12-01", "sends": 100},
-            {"date": "2023-12-02", "sends": 90}
+            {"date": "2023-12-02", "sends": 90},
         ]
 
         self._create_test_data(canvas_id, test_data)
@@ -146,7 +149,7 @@ class TestStepBasedForecaster(unittest.TestCase):
         self.assertEqual(result.canvas_id, canvas_id)
         self.assertIsNone(result.quiet_date)
         self.assertEqual(result.confidence, 0.0)
-        self.assertEqual(result.current_trend, 'insufficient_data')
+        self.assertEqual(result.current_trend, "insufficient_data")
 
     def test_predict_quiet_date_declining_trend(self):
         """Test prediction with declining trend."""
@@ -162,14 +165,16 @@ class TestStepBasedForecaster(unittest.TestCase):
             delivered = max(0, 80 - i * 5)
             opens = max(0, 20 - i)
             conversions = max(0, 7 - i // 2)
-            test_data.append({
-                "date": current_date.isoformat(),
-                "entries": sends + 5,
-                "sends": sends,
-                "delivered": delivered,
-                "opens": opens,
-                "conversions": conversions
-            })
+            test_data.append(
+                {
+                    "date": current_date.isoformat(),
+                    "entries": sends + 5,
+                    "sends": sends,
+                    "delivered": delivered,
+                    "opens": opens,
+                    "conversions": conversions,
+                }
+            )
 
         self._create_test_data(canvas_id, test_data)
 
@@ -178,7 +183,7 @@ class TestStepBasedForecaster(unittest.TestCase):
         self.assertEqual(result.canvas_id, canvas_id)
         self.assertIsNotNone(result.quiet_date)
         self.assertGreater(result.confidence, 0.0)
-        self.assertEqual(result.current_trend, 'declining')
+        self.assertEqual(result.current_trend, "declining")
         self.assertIsNotNone(result.days_to_quiet)
 
     def test_predict_quiet_date_growing_trend(self):
@@ -191,21 +196,23 @@ class TestStepBasedForecaster(unittest.TestCase):
         for i in range(10):  # 10 days of data
             current_date = base_date + timedelta(days=i)
             sends = 50 + i * 10  # Growing by 10 per day
-            test_data.append({
-                "date": current_date.isoformat(),
-                "entries": sends + 5,
-                "sends": sends,
-                "delivered": sends - 2,
-                "opens": int(sends * 0.1),
-                "conversions": int(sends * 0.02)
-            })
+            test_data.append(
+                {
+                    "date": current_date.isoformat(),
+                    "entries": sends + 5,
+                    "sends": sends,
+                    "delivered": sends - 2,
+                    "opens": int(sends * 0.1),
+                    "conversions": int(sends * 0.02),
+                }
+            )
 
         self._create_test_data(canvas_id, test_data)
 
         result = self.forecaster.predict_quiet_date(canvas_id, self.data_dir)
 
         self.assertEqual(result.canvas_id, canvas_id)
-        self.assertEqual(result.current_trend, 'growing')
+        self.assertEqual(result.current_trend, "growing")
         # Growing trends should have reduced confidence
         if result.confidence > 0:
             self.assertLess(result.confidence, 0.7)
@@ -220,21 +227,23 @@ class TestStepBasedForecaster(unittest.TestCase):
         for i in range(10):  # 10 days of data
             current_date = base_date + timedelta(days=i)
             sends = 50 + np.random.randint(-5, 6)  # Stable around 50
-            test_data.append({
-                "date": current_date.isoformat(),
-                "entries": sends + 5,
-                "sends": sends,
-                "delivered": sends - 2,
-                "opens": int(sends * 0.1),
-                "conversions": int(sends * 0.02)
-            })
+            test_data.append(
+                {
+                    "date": current_date.isoformat(),
+                    "entries": sends + 5,
+                    "sends": sends,
+                    "delivered": sends - 2,
+                    "opens": int(sends * 0.1),
+                    "conversions": int(sends * 0.02),
+                }
+            )
 
         self._create_test_data(canvas_id, test_data)
 
         result = self.forecaster.predict_quiet_date(canvas_id, self.data_dir)
 
         self.assertEqual(result.canvas_id, canvas_id)
-        self.assertEqual(result.current_trend, 'stable')
+        self.assertEqual(result.current_trend, "stable")
 
     def test_linear_decay_func(self):
         """Test the linear decay function."""
@@ -263,6 +272,7 @@ class TestQuietDatePredictor(unittest.TestCase):
     def tearDown(self):
         """Clean up test fixtures."""
         import shutil
+
         shutil.rmtree(self.temp_dir)
 
     def _create_test_data(self, canvas_id: str, data_points: list) -> None:
@@ -276,7 +286,7 @@ class TestQuietDatePredictor(unittest.TestCase):
 
         # Create channel file
         channel_file = step_dir / "email.jsonl"
-        with channel_file.open('w') as f:
+        with channel_file.open("w") as f:
             for point in data_points:
                 # Convert test data to the expected format
                 record = {
@@ -288,9 +298,9 @@ class TestQuietDatePredictor(unittest.TestCase):
                     "unique_opens": point.get("opens", 0),
                     "unique_clicks": point.get("conversions", 0),
                     "bounces": 0,
-                    "unsubscribes": 0
+                    "unsubscribes": 0,
                 }
-                f.write(json.dumps(record) + '\n')
+                f.write(json.dumps(record) + "\n")
 
     def test_predict_all_canvases_empty_dir(self):
         """Test predicting when no data files exist."""
@@ -307,14 +317,16 @@ class TestQuietDatePredictor(unittest.TestCase):
             for i in range(10):
                 current_date = base_date + timedelta(days=i)
                 sends = 100 - i * 5  # Declining trend
-                test_data.append({
-                    "date": current_date.isoformat(),
-                    "entries": sends + 5,
-                    "sends": sends,
-                    "delivered": sends - 2,
-                    "opens": int(sends * 0.1),
-                    "conversions": int(sends * 0.02)
-                })
+                test_data.append(
+                    {
+                        "date": current_date.isoformat(),
+                        "entries": sends + 5,
+                        "sends": sends,
+                        "delivered": sends - 2,
+                        "opens": int(sends * 0.1),
+                        "conversions": int(sends * 0.02),
+                    }
+                )
 
             self._create_test_data(canvas_id, test_data)
 
@@ -335,14 +347,16 @@ class TestQuietDatePredictor(unittest.TestCase):
         for i in range(14):
             current_date = base_date + timedelta(days=i)
             sends = max(0, 100 - i * 10)
-            declining_data.append({
-                "date": current_date.isoformat(),
-                "entries": sends + 5,
-                "sends": sends,
-                "delivered": sends - 2,
-                "opens": int(sends * 0.1),
-                "conversions": int(sends * 0.02)
-            })
+            declining_data.append(
+                {
+                    "date": current_date.isoformat(),
+                    "entries": sends + 5,
+                    "sends": sends,
+                    "delivered": sends - 2,
+                    "opens": int(sends * 0.1),
+                    "conversions": int(sends * 0.02),
+                }
+            )
 
         self._create_test_data("declining-canvas", declining_data)
 
@@ -351,40 +365,42 @@ class TestQuietDatePredictor(unittest.TestCase):
         for i in range(10):
             current_date = base_date + timedelta(days=i)
             sends = 50 + np.random.randint(-5, 6)
-            stable_data.append({
-                "date": current_date.isoformat(),
-                "entries": sends + 5,
-                "sends": sends,
-                "delivered": sends - 2,
-                "opens": int(sends * 0.1),
-                "conversions": int(sends * 0.02)
-            })
+            stable_data.append(
+                {
+                    "date": current_date.isoformat(),
+                    "entries": sends + 5,
+                    "sends": sends,
+                    "delivered": sends - 2,
+                    "opens": int(sends * 0.1),
+                    "conversions": int(sends * 0.02),
+                }
+            )
 
         self._create_test_data("stable-canvas", stable_data)
 
         report = self.predictor.generate_forecast_report()
 
         # Check report structure
-        self.assertIn('summary', report)
-        self.assertIn('trends', report)
-        self.assertIn('confidence_distribution', report)
-        self.assertIn('all_canvases', report)
+        self.assertIn("summary", report)
+        self.assertIn("trends", report)
+        self.assertIn("confidence_distribution", report)
+        self.assertIn("all_canvases", report)
 
         # Check summary
-        summary = report['summary']
-        self.assertEqual(summary['total_canvases'], 2)
-        self.assertIsInstance(summary['predictable'], int)
-        self.assertIsInstance(summary['unpredictable'], int)
+        summary = report["summary"]
+        self.assertEqual(summary["total_canvases"], 2)
+        self.assertIsInstance(summary["predictable"], int)
+        self.assertIsInstance(summary["unpredictable"], int)
 
         # Check trends
-        trends = report['trends']
+        trends = report["trends"]
         self.assertIsInstance(trends, dict)
 
         # Check confidence distribution
-        confidence = report['confidence_distribution']
-        self.assertIn('high', confidence)
-        self.assertIn('medium', confidence)
-        self.assertIn('low', confidence)
+        confidence = report["confidence_distribution"]
+        self.assertIn("high", confidence)
+        self.assertIn("medium", confidence)
+        self.assertIn("low", confidence)
 
 
 class TestForecastResult(unittest.TestCase):
@@ -401,7 +417,7 @@ class TestForecastResult(unittest.TestCase):
             days_to_quiet=15,
             current_trend="declining",
             model_params={"slope": -2.5, "intercept": 50.0},
-            metric_used="total_sent"
+            metric_used="total_sent",
         )
 
         self.assertEqual(result.canvas_id, "test-canvas")
@@ -425,7 +441,7 @@ class TestForecastResult(unittest.TestCase):
             days_to_quiet=None,
             current_trend="insufficient_data",
             model_params={},
-            metric_used="none"
+            metric_used="none",
         )
 
         self.assertEqual(result.canvas_id, "test-canvas")
@@ -439,5 +455,5 @@ class TestForecastResult(unittest.TestCase):
         self.assertEqual(result.metric_used, "none")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

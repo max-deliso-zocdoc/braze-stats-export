@@ -33,7 +33,7 @@ class TestBrazeAPIClient:
 
         assert client.endpoint == custom_endpoint
 
-    @patch('src.api.client.requests.get')
+    @patch("src.api.client.requests.get")
     def test_make_request_get_success(self, mock_get):
         """Test successful GET request."""
         # Mock response
@@ -52,13 +52,13 @@ class TestBrazeAPIClient:
             "https://rest.iad-02.braze.com/test",
             headers={"Authorization": "Bearer test-api-key"},
             params={"limit": 10},
-            timeout=10
+            timeout=10,
         )
         assert len(self.client.request_log) == 1
         assert self.client.request_log[0].success is True
         assert self.client.request_log[0].endpoint == "/test"
 
-    @patch('src.api.client.requests.get')
+    @patch("src.api.client.requests.get")
     def test_make_request_get_failure(self, mock_get):
         """Test failed GET request."""
         # Mock response
@@ -66,7 +66,9 @@ class TestBrazeAPIClient:
         mock_response.status_code = 404
         mock_response.ok = False
         mock_response.text = "Not Found"
-        mock_response.raise_for_status.side_effect = requests.HTTPError("404 Client Error")
+        mock_response.raise_for_status.side_effect = requests.HTTPError(
+            "404 Client Error"
+        )
         mock_get.return_value = mock_response
 
         # Make request and expect exception
@@ -74,15 +76,19 @@ class TestBrazeAPIClient:
             self.client._make_request("/test")
 
         # Assertions
-        assert len(self.client.request_log) == 2  # One for failed response, one for exception
+        assert (
+            len(self.client.request_log) == 2
+        )  # One for failed response, one for exception
         assert self.client.request_log[0].success is False
         assert self.client.request_log[0].status_code == 404
         assert self.client.request_log[0].error_message == "Not Found"
         assert self.client.request_log[1].success is False
-        assert self.client.request_log[1].status_code == 0  # Exception doesn't have status code
+        assert (
+            self.client.request_log[1].status_code == 0
+        )  # Exception doesn't have status code
         assert "404 Client Error" in self.client.request_log[1].error_message
 
-    @patch('src.api.client.requests.get')
+    @patch("src.api.client.requests.get")
     def test_make_request_connection_error(self, mock_get):
         """Test connection error during request."""
         mock_get.side_effect = requests.ConnectionError("Connection failed")
@@ -95,7 +101,7 @@ class TestBrazeAPIClient:
         assert self.client.request_log[0].status_code == 0
         assert "Connection failed" in self.client.request_log[0].error_message
 
-    @patch('src.api.client.requests.request')
+    @patch("src.api.client.requests.request")
     def test_make_request_post(self, mock_request):
         """Test POST request."""
         mock_response = Mock(spec=Response)
@@ -103,7 +109,9 @@ class TestBrazeAPIClient:
         mock_response.ok = True
         mock_request.return_value = mock_response
 
-        response = self.client._make_request("/test", method="POST", data={"key": "value"})
+        response = self.client._make_request(
+            "/test", method="POST", data={"key": "value"}
+        )
 
         assert response == mock_response
         mock_request.assert_called_once_with(
@@ -111,23 +119,23 @@ class TestBrazeAPIClient:
             "https://rest.iad-02.braze.com/test",
             headers={"Authorization": "Bearer test-api-key"},
             json={"data": {"key": "value"}},
-            timeout=10
+            timeout=10,
         )
 
-    @patch.object(BrazeAPIClient, '_make_request')
+    @patch.object(BrazeAPIClient, "_make_request")
     def test_get_canvas_list(self, mock_make_request):
         """Test get_canvas_list method."""
         # Mock response data
         response_data = {
-            'canvases': [
+            "canvases": [
                 {
-                    'id': 'canvas-1',
-                    'name': 'Test Canvas',
-                    'tags': ['tag1'],
-                    'last_edited': '2023-01-01T12:00:00+00:00'
+                    "id": "canvas-1",
+                    "name": "Test Canvas",
+                    "tags": ["tag1"],
+                    "last_edited": "2023-01-01T12:00:00+00:00",
                 }
             ],
-            'message': 'success'
+            "message": "success",
         }
 
         mock_response = Mock()
@@ -135,41 +143,43 @@ class TestBrazeAPIClient:
         mock_make_request.return_value = mock_response
 
         # Call method
-        result = self.client.get_canvas_list(include_archived=True, sort_direction="asc")
+        result = self.client.get_canvas_list(
+            include_archived=True, sort_direction="asc"
+        )
 
         # Assertions
         assert isinstance(result, CanvasListResponse)
         assert len(result.canvases) == 1
-        assert result.canvases[0].id == 'canvas-1'
-        assert result.message == 'success'
+        assert result.canvases[0].id == "canvas-1"
+        assert result.message == "success"
 
         # Should be called multiple times due to pagination, check first call
         first_call = mock_make_request.call_args_list[0]
-        assert first_call[1]['page'] == 0
-        assert first_call[1]['include_archived'] == True
-        assert first_call[1]['sort_direction'] == "asc"
+        assert first_call[1]["page"] == 0
+        assert first_call[1]["include_archived"] == True
+        assert first_call[1]["sort_direction"] == "asc"
 
-    @patch.object(BrazeAPIClient, '_make_request')
+    @patch.object(BrazeAPIClient, "_make_request")
     def test_get_canvas_details(self, mock_make_request):
         """Test get_canvas_details method."""
         # Mock response data
         response_data = {
-            'name': 'Test Canvas',
-            'description': 'Test Description',
-            'created_at': '2023-01-01T12:00:00+00:00',
-            'updated_at': '2023-01-02T12:00:00+00:00',
-            'archived': False,
-            'draft': False,
-            'enabled': True,
-            'has_post_launch_draft': False,
-            'schedule_type': 'action_based',
-            'first_entry': '2023-01-01T12:00:00Z',
-            'last_entry': '2023-12-31T12:00:00Z',
-            'channels': ['email'],
-            'tags': ['tag1'],
-            'teams': [],
-            'variants': [],
-            'steps': []
+            "name": "Test Canvas",
+            "description": "Test Description",
+            "created_at": "2023-01-01T12:00:00+00:00",
+            "updated_at": "2023-01-02T12:00:00+00:00",
+            "archived": False,
+            "draft": False,
+            "enabled": True,
+            "has_post_launch_draft": False,
+            "schedule_type": "action_based",
+            "first_entry": "2023-01-01T12:00:00Z",
+            "last_entry": "2023-12-31T12:00:00Z",
+            "channels": ["email"],
+            "tags": ["tag1"],
+            "teams": [],
+            "variants": [],
+            "steps": [],
         }
 
         mock_response = Mock()
@@ -177,27 +187,29 @@ class TestBrazeAPIClient:
         mock_make_request.return_value = mock_response
 
         # Call method
-        result = self.client.get_canvas_details('canvas-123')
+        result = self.client.get_canvas_details("canvas-123")
 
         # Assertions
         assert isinstance(result, CanvasDetails)
-        assert result.canvas_id == 'canvas-123'
-        assert result.name == 'Test Canvas'
+        assert result.canvas_id == "canvas-123"
+        assert result.name == "Test Canvas"
         assert result.enabled is True
-        mock_make_request.assert_called_once_with("/canvas/details", canvas_id='canvas-123')
+        mock_make_request.assert_called_once_with(
+            "/canvas/details", canvas_id="canvas-123"
+        )
 
-    @patch.object(BrazeAPIClient, '_make_request')
+    @patch.object(BrazeAPIClient, "_make_request")
     def test_get_canvas_details_wrapped_response(self, mock_make_request):
         """Test get_canvas_details with wrapped canvas response."""
         # Mock wrapped response data
         response_data = {
-            'canvas': {
-                'name': 'Test Canvas',
-                'enabled': True,
-                'channels': ['email'],
-                'tags': [],
-                'variants': [],
-                'steps': []
+            "canvas": {
+                "name": "Test Canvas",
+                "enabled": True,
+                "channels": ["email"],
+                "tags": [],
+                "variants": [],
+                "steps": [],
             }
         }
 
@@ -206,37 +218,37 @@ class TestBrazeAPIClient:
         mock_make_request.return_value = mock_response
 
         # Call method
-        result = self.client.get_canvas_details('canvas-123')
+        result = self.client.get_canvas_details("canvas-123")
 
         # Assertions
         assert isinstance(result, CanvasDetails)
-        assert result.canvas_id == 'canvas-123'
-        assert result.name == 'Test Canvas'
+        assert result.canvas_id == "canvas-123"
+        assert result.name == "Test Canvas"
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('json.dump')
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("json.dump")
     def test_save_request_log(self, mock_json_dump, mock_file):
         """Test save_request_log method."""
         # Add some mock logs
         self.client.request_log = [
-            Mock(to_dict=Mock(return_value={'test': 'log1'})),
-            Mock(to_dict=Mock(return_value={'test': 'log2'}))
+            Mock(to_dict=Mock(return_value={"test": "log1"})),
+            Mock(to_dict=Mock(return_value={"test": "log2"})),
         ]
 
         # Call method
-        self.client.save_request_log('test_log.json')
+        self.client.save_request_log("test_log.json")
 
         # Assertions
-        mock_file.assert_called_once_with('test_log.json', 'w')
+        mock_file.assert_called_once_with("test_log.json", "w")
         mock_json_dump.assert_called_once()
 
         # Check that the data passed to json.dump is correct
         call_args = mock_json_dump.call_args
-        assert call_args[0][0] == [{'test': 'log1'}, {'test': 'log2'}]
+        assert call_args[0][0] == [{"test": "log1"}, {"test": "log2"}]
 
     def test_request_log_timing(self):
         """Test that request timing is properly recorded."""
-        with patch('src.api.client.requests.get') as mock_get:
+        with patch("src.api.client.requests.get") as mock_get:
             mock_response = Mock(spec=Response)
             mock_response.status_code = 200
             mock_response.ok = True

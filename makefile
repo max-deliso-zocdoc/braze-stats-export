@@ -27,7 +27,7 @@ test-cov:
 	pyenv exec python -m pytest tests/ -v --cov=src --cov-report=html --cov-report=term
 
 fmt:
-	pyenv exec black src/
+	pyenv exec black src/ tests/
 
 clean:
 	@pyenv virtualenv-delete -f $(VENV_NAME) || true
