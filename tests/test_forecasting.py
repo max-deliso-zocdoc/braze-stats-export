@@ -11,41 +11,41 @@ import numpy as np
 import pytest
 
 from src.forecasting.linear_decay import (
-    LinearDecayForecaster,
+    StepBasedForecaster,
     QuietDatePredictor,
-    DailyStats,
+    CanvasMetrics,
     ForecastResult
 )
 
 
-class TestDailyStats(unittest.TestCase):
-    """Test the DailyStats dataclass."""
+class TestCanvasMetrics(unittest.TestCase):
+    """Test the CanvasMetrics dataclass."""
 
-    def test_daily_stats_creation(self):
-        """Test creating DailyStats instances."""
-        stats = DailyStats(
+    def test_canvas_metrics_creation(self):
+        """Test creating CanvasMetrics instances."""
+        stats = CanvasMetrics(
             date=date(2023, 12, 1),
-            entries=100,
-            sends=95,
-            delivered=90,
-            opens=15,
-            conversions=2
+            canvas_id="test-canvas",
+            total_sent=95,
+            total_delivered=90,
+            total_opens=15,
+            total_clicks=2
         )
 
         self.assertEqual(stats.date, date(2023, 12, 1))
-        self.assertEqual(stats.entries, 100)
-        self.assertEqual(stats.sends, 95)
-        self.assertEqual(stats.delivered, 90)
-        self.assertEqual(stats.opens, 15)
-        self.assertEqual(stats.conversions, 2)
+        self.assertEqual(stats.canvas_id, "test-canvas")
+        self.assertEqual(stats.total_sent, 95)
+        self.assertEqual(stats.total_delivered, 90)
+        self.assertEqual(stats.total_opens, 15)
+        self.assertEqual(stats.total_clicks, 2)
 
 
-class TestLinearDecayForecaster(unittest.TestCase):
-    """Test the LinearDecayForecaster class."""
+class TestStepBasedForecaster(unittest.TestCase):
+    """Test the StepBasedForecaster class."""
 
     def setUp(self):
         """Set up test fixtures."""
-        self.forecaster = LinearDecayForecaster(quiet_threshold=5, min_data_points=7)
+        self.forecaster = StepBasedForecaster(quiet_threshold=5, min_data_points=7)
         self.temp_dir = tempfile.mkdtemp()
         self.data_dir = Path(self.temp_dir)
 
@@ -55,13 +55,33 @@ class TestLinearDecayForecaster(unittest.TestCase):
         shutil.rmtree(self.temp_dir)
 
     def _create_test_data(self, canvas_id: str, data_points: list) -> None:
-        """Create test JSONL data file."""
-        jsonl_path = self.data_dir / f"{canvas_id}.jsonl"
-        with jsonl_path.open('w') as f:
-            for point in data_points:
-                f.write(json.dumps(point) + '\n')
+        """Create test data in the expected step-based directory structure."""
+        canvas_dir = self.data_dir / canvas_id
+        canvas_dir.mkdir(exist_ok=True)
 
-    def test_load_canvas_data_success(self):
+        # Create a step directory
+        step_dir = canvas_dir / "step1"
+        step_dir.mkdir(exist_ok=True)
+
+        # Create channel file
+        channel_file = step_dir / "email.jsonl"
+        with channel_file.open('w') as f:
+            for point in data_points:
+                # Convert test data to the expected format
+                record = {
+                    "date": point["date"],
+                    "sent": point.get("sends", 0),
+                    "delivered": point.get("delivered", 0),
+                    "opens": point.get("opens", 0),
+                    "clicks": point.get("conversions", 0),
+                    "unique_opens": point.get("opens", 0),
+                    "unique_clicks": point.get("conversions", 0),
+                    "bounces": 0,
+                    "unsubscribes": 0
+                }
+                f.write(json.dumps(record) + '\n')
+
+    def test_load_canvas_metrics_success(self):
         """Test successful data loading."""
         canvas_id = "test-canvas"
         test_data = [
@@ -85,20 +105,20 @@ class TestLinearDecayForecaster(unittest.TestCase):
 
         self._create_test_data(canvas_id, test_data)
 
-        daily_stats = self.forecaster.load_canvas_data(canvas_id, self.data_dir)
+        canvas_metrics = self.forecaster.load_canvas_metrics(canvas_id, self.data_dir)
 
-        self.assertEqual(len(daily_stats), 2)
-        self.assertEqual(daily_stats[0].date, date(2023, 12, 1))
-        self.assertEqual(daily_stats[0].sends, 95)
-        self.assertEqual(daily_stats[1].date, date(2023, 12, 2))
-        self.assertEqual(daily_stats[1].sends, 85)
+        self.assertEqual(len(canvas_metrics), 2)
+        self.assertEqual(canvas_metrics[0].date, date(2023, 12, 1))
+        self.assertEqual(canvas_metrics[0].total_sent, 95)
+        self.assertEqual(canvas_metrics[1].date, date(2023, 12, 2))
+        self.assertEqual(canvas_metrics[1].total_sent, 85)
 
-    def test_load_canvas_data_missing_file(self):
+    def test_load_canvas_metrics_missing_file(self):
         """Test loading data when file doesn't exist."""
-        daily_stats = self.forecaster.load_canvas_data("nonexistent", self.data_dir)
-        self.assertEqual(len(daily_stats), 0)
+        canvas_metrics = self.forecaster.load_canvas_metrics("nonexistent", self.data_dir)
+        self.assertEqual(len(canvas_metrics), 0)
 
-    def test_load_canvas_data_malformed_json(self):
+    def test_load_canvas_metrics_malformed_json(self):
         """Test loading data with malformed JSON."""
         canvas_id = "malformed-canvas"
         jsonl_path = self.data_dir / f"{canvas_id}.jsonl"
@@ -108,8 +128,8 @@ class TestLinearDecayForecaster(unittest.TestCase):
             f.write('malformed json line\n')
             f.write('{"date": "2023-12-02", "sends": 85}\n')
 
-        daily_stats = self.forecaster.load_canvas_data(canvas_id, self.data_dir)
-        self.assertEqual(len(daily_stats), 0)  # Should return empty list on error
+        canvas_metrics = self.forecaster.load_canvas_metrics(canvas_id, self.data_dir)
+        self.assertEqual(len(canvas_metrics), 0)  # Should return empty list on error
 
     def test_predict_quiet_date_insufficient_data(self):
         """Test prediction with insufficient data points."""
@@ -133,18 +153,22 @@ class TestLinearDecayForecaster(unittest.TestCase):
         canvas_id = "declining-canvas"
         base_date = date(2023, 12, 1)
 
-        # Create declining trend data
+        # Create declining trend data for all metrics, ensuring last 7 days are not flat
         test_data = []
         for i in range(14):  # 14 days of data
             current_date = base_date + timedelta(days=i)
-            sends = max(0, 100 - i * 10)  # Declining by 10 per day
+            # Decline by 5 per day, so last 7 days are 45, 40, ..., 15
+            sends = max(0, 90 - i * 5)
+            delivered = max(0, 80 - i * 5)
+            opens = max(0, 20 - i)
+            conversions = max(0, 7 - i // 2)
             test_data.append({
                 "date": current_date.isoformat(),
                 "entries": sends + 5,
                 "sends": sends,
-                "delivered": sends - 2,
-                "opens": int(sends * 0.1),
-                "conversions": int(sends * 0.02)
+                "delivered": delivered,
+                "opens": opens,
+                "conversions": conversions
             })
 
         self._create_test_data(canvas_id, test_data)
@@ -242,11 +266,31 @@ class TestQuietDatePredictor(unittest.TestCase):
         shutil.rmtree(self.temp_dir)
 
     def _create_test_data(self, canvas_id: str, data_points: list) -> None:
-        """Create test JSONL data file."""
-        jsonl_path = self.data_dir / f"{canvas_id}.jsonl"
-        with jsonl_path.open('w') as f:
+        """Create test data in the expected step-based directory structure."""
+        canvas_dir = self.data_dir / canvas_id
+        canvas_dir.mkdir(exist_ok=True)
+
+        # Create a step directory
+        step_dir = canvas_dir / "step1"
+        step_dir.mkdir(exist_ok=True)
+
+        # Create channel file
+        channel_file = step_dir / "email.jsonl"
+        with channel_file.open('w') as f:
             for point in data_points:
-                f.write(json.dumps(point) + '\n')
+                # Convert test data to the expected format
+                record = {
+                    "date": point["date"],
+                    "sent": point.get("sends", 0),
+                    "delivered": point.get("delivered", 0),
+                    "opens": point.get("opens", 0),
+                    "clicks": point.get("conversions", 0),
+                    "unique_opens": point.get("opens", 0),
+                    "unique_clicks": point.get("conversions", 0),
+                    "bounces": 0,
+                    "unsubscribes": 0
+                }
+                f.write(json.dumps(record) + '\n')
 
     def test_predict_all_canvases_empty_dir(self):
         """Test predicting when no data files exist."""
@@ -351,38 +395,49 @@ class TestForecastResult(unittest.TestCase):
         """Test creating ForecastResult instances."""
         result = ForecastResult(
             canvas_id="test-canvas",
+            canvas_name="Test Canvas",
             quiet_date=date(2023, 12, 31),
             confidence=0.85,
             r_squared=0.92,
             days_to_quiet=15,
             current_trend="declining",
-            model_params={"slope": -2.5, "intercept": 50.0}
+            model_params={"slope": -2.5, "intercept": 50.0},
+            metric_used="total_sent"
         )
 
         self.assertEqual(result.canvas_id, "test-canvas")
+        self.assertEqual(result.canvas_name, "Test Canvas")
         self.assertEqual(result.quiet_date, date(2023, 12, 31))
         self.assertEqual(result.confidence, 0.85)
         self.assertEqual(result.r_squared, 0.92)
         self.assertEqual(result.days_to_quiet, 15)
         self.assertEqual(result.current_trend, "declining")
         self.assertEqual(result.model_params, {"slope": -2.5, "intercept": 50.0})
+        self.assertEqual(result.metric_used, "total_sent")
 
     def test_forecast_result_none_values(self):
         """Test ForecastResult with None values."""
         result = ForecastResult(
             canvas_id="test-canvas",
+            canvas_name="Test Canvas",
             quiet_date=None,
             confidence=0.0,
             r_squared=0.0,
             days_to_quiet=None,
             current_trend="insufficient_data",
-            model_params={}
+            model_params={},
+            metric_used="none"
         )
 
         self.assertEqual(result.canvas_id, "test-canvas")
+        self.assertEqual(result.canvas_name, "Test Canvas")
         self.assertIsNone(result.quiet_date)
+        self.assertEqual(result.confidence, 0.0)
+        self.assertEqual(result.r_squared, 0.0)
         self.assertIsNone(result.days_to_quiet)
         self.assertEqual(result.current_trend, "insufficient_data")
+        self.assertEqual(result.model_params, {})
+        self.assertEqual(result.metric_used, "none")
 
 
 if __name__ == '__main__':
