@@ -4,19 +4,17 @@ A comprehensive Python tool for **time-series forecasting** of Braze Canvas data
 
 ### Installation
 
-1. **Clone and setup environment:**
-
 ```bash
 make install
 ```
 
-### Step 1: Retrieve Historical Data
+### Fetch
 
 **⚠️ API Key Required** - You need a valid Braze REST API key with canvas read permissions.
 
 ```bash
 make ingest-historical # examine this command then add your api key
-BRAZE_REST_KEY=your-braze-rest-key pyenv exec python -m src.ingest_historical --days 90 --filter-prefix "transactional" #  e.g.
+BRAZE_REST_KEY=your-braze-rest-key pyenv exec python -m src.ingest_historical --days 90 --filter-prefix "transactional"
 ```
 
 This command will:
@@ -25,7 +23,7 @@ This command will:
 - Process thousands of event records with actual engagement metrics
 - Handle API rate limiting and chunking automatically
 
-### Step 2: Process with Linear Regression
+### Forecast
 
 ```bash
 # Run linear regression analysis on the collected data
