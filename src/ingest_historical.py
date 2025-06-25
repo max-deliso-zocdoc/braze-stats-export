@@ -449,7 +449,9 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
     return total_new_records
 
 
-def ingest_historical_data(start_date: str, end_date: str, filter_prefix: str = None) -> None:
+def ingest_historical_data(
+    start_date: str, end_date: str, filter_prefix: str = None
+) -> None:
     """
     Main function to ingest historical data for all Canvas IDs.
 
@@ -578,7 +580,7 @@ Examples:
     parser.add_argument(
         "--filter-prefix",
         type=str,
-        help="Only ingest canvases whose names start with this prefix (case-insensitive)"
+        help="Only ingest canvases whose names start with this prefix (case-insensitive)",
     )
 
     args = parser.parse_args()
