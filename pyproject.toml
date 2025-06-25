@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "braze-stats-export"
+version = "0.1.0"
+description = "Braze statistics export tool with forecasting capabilities"
+requires-python = ">=3.11"
+dependencies = [
+    "requests~=2.32",
+    "tenacity~=8.2",
+    "python-dotenv~=1.0",
+    "numpy~=1.24.0",
+    "scipy~=1.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black~=24.3",
+    "flake8~=7.0",
+    "pytest~=8.2",
+    "mypy~=1.8.0",
+]
+
+[tool.mypy]
+python_version = "3.11"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_unreachable = true
+strict_equality = true
+ignore_missing_imports = true
+show_error_codes = true
+files = ["src/"]
+exclude = [
+    ".*_test\\.py",
+    ".*test_.*\\.py",
+    "tests/.*",
+    ".*\\.egg-info/.*",
+    ".*\\.git/.*",
+    ".*\\.venv/.*",
+    ".*\\.env/.*",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "numpy.*",
+    "scipy.*",
+    "requests.*",
+    "tenacity.*",
+]
+ignore_missing_imports = true
+
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

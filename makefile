@@ -1,4 +1,4 @@
-.PHONY: setup venv install lint test fmt clean forecast ingest-historical
+.PHONY: setup venv install lint test fmt clean forecast ingest-historical typecheck check
 
 PYTHON_VERSION ?= 3.11.4
 VENV_NAME      ?= braze-extractor-env
@@ -19,6 +19,11 @@ install: venv
 
 lint:
 	pyenv exec flake8 src/
+
+typecheck:
+	pyenv exec mypy src/
+
+check: lint typecheck test
 
 test:
 	pyenv exec python -m pytest tests/ -v
