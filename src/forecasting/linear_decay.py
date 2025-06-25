@@ -19,7 +19,6 @@ from typing_extensions import TypedDict
 
 import numpy as np
 from scipy import stats
-from scipy.optimize import curve_fit
 
 
 logger = logging.getLogger(__name__)
@@ -245,6 +244,83 @@ class StepBasedForecaster:
         """Exponential decay function: y = a * exp(-bx) + c"""
         return a * np.exp(-b * x) + c
 
+    def _log_exponential_decay_func(
+        self, x: np.ndarray, log_a: float, b: float, c: float
+    ) -> np.ndarray:
+        """Log-space exponential decay function: y = exp(log_a - bx) + c"""
+        return np.exp(log_a - b * x) + c
+
+    def _fit_exponential_log_space(
+        self, x: np.ndarray, y: np.ndarray
+    ) -> tuple[np.ndarray, float]:
+        """
+        Fit exponential decay in log space for better numerical stability.
+
+        Args:
+            x: Independent variable (days)
+            y: Dependent variable (metrics)
+
+        Returns:
+            Tuple of (parameters, r_squared)
+        """
+        # Filter out zero and negative values for log transformation
+        positive_mask = y > 0
+        if np.sum(positive_mask) < self.min_data_points:
+            raise ValueError("Insufficient positive data points for log-space fitting")
+
+        x_positive = x[positive_mask]
+        y_positive = y[positive_mask]
+
+        # Ensure we have enough variation in the data
+        if np.max(y_positive) - np.min(y_positive) < 1:
+            raise ValueError("Insufficient variation in data for exponential fitting")
+
+        # Transform to log space: log(y - c) = log_a - bx
+        # We need to estimate c first, then fit log(y - c) vs x
+        c_estimate = np.min(y_positive) * 0.1  # Small offset to avoid log(0)
+
+        # Ensure y - c_estimate is positive for all values
+        y_adjusted = y_positive - c_estimate
+        if np.any(y_adjusted <= 0):
+            # Adjust c_estimate to ensure all values are positive
+            c_estimate = np.min(y_positive) - 0.1
+            y_adjusted = y_positive - c_estimate
+            if np.any(y_adjusted <= 0):
+                raise ValueError("Cannot ensure positive values for log transformation")
+
+        # Transform: log(y - c_estimate) = log_a - bx
+        y_transformed = np.log(y_adjusted)
+
+        # Check for infinite or NaN values
+        if np.any(~np.isfinite(y_transformed)):
+            raise ValueError("Log transformation produced infinite or NaN values")
+
+        # Fit linear model: log(y - c) = log_a - bx
+        # This is equivalent to: log(y - c) = log_a - bx
+        slope, intercept, r_value, p_value, std_err = stats.linregress(
+            x_positive, y_transformed
+        )
+
+        # Extract parameters: slope = -b, intercept = log_a
+        b_fitted = -slope
+        log_a_fitted = intercept
+
+        # Validate parameters
+        if not np.isfinite(b_fitted) or not np.isfinite(log_a_fitted):
+            raise ValueError("Fitted parameters are not finite")
+
+        # Ensure b is positive (decay rate should be positive)
+        if b_fitted <= 0:
+            raise ValueError("Decay rate must be positive")
+
+        # Calculate R-squared
+        y_pred_transformed = log_a_fitted - b_fitted * x_positive
+        ss_res = np.sum((y_transformed - y_pred_transformed) ** 2)
+        ss_tot = np.sum((y_transformed - np.mean(y_transformed)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+        return np.array([log_a_fitted, b_fitted, c_estimate]), r_squared
+
     def predict_quiet_date(
         self, canvas_id: str, data_dir: Optional[Path] = None
     ) -> ForecastResult:
@@ -327,31 +403,19 @@ class StepBasedForecaster:
                     x_nonzero = x_values[non_zero_mask]
                     y_nonzero = y_values_array[non_zero_mask]
 
-                    # Initial guess for exponential decay
-                    initial_guess = [y_nonzero[0], 0.1, self.quiet_threshold]
+                    # Use log-space fitting for better numerical stability
+                    popt, exp_r_squared = self._fit_exponential_log_space(x_nonzero, y_nonzero)
+                    log_a, b, c = popt
 
-                    popt, _ = curve_fit(
-                        self._exponential_decay_func,
-                        x_nonzero,
-                        y_nonzero,
-                        p0=initial_guess,
-                        maxfev=1000,
-                    )
-
-                    # Calculate R-squared for exponential model
-                    y_pred_exp = self._exponential_decay_func(x_nonzero, *popt)
-                    ss_res = np.sum((y_nonzero - y_pred_exp) ** 2)
-                    ss_tot = np.sum((y_nonzero - np.mean(y_nonzero)) ** 2)
-                    exp_r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                    # Convert log_a back to a for compatibility
+                    a = np.exp(log_a)
 
                     models.append(
                         {
                             "type": "exponential",
-                            "params": {"a": popt[0], "b": popt[1], "c": popt[2]},
+                            "params": {"a": a, "b": b, "c": c, "log_a": log_a},
                             "r_squared": exp_r_squared,
-                            "function": lambda x: self._exponential_decay_func(
-                                x, *popt
-                            ),
+                            "function": lambda x: self._log_exponential_decay_func(x, log_a, b, c),
                         }
                     )
                 except Exception as e:
@@ -372,9 +436,9 @@ class StepBasedForecaster:
                 recent_values = y_values_array[-min(7, len(y_values_array)) :]  # Last week
                 if len(recent_values) >= 2:
                     recent_trend = np.mean(np.diff(recent_values))
-                    if recent_trend < -1:
+                    if recent_trend < -3:
                         trend = "declining"
-                    elif recent_trend > 1:
+                    elif recent_trend > 3:
                         trend = "growing"
                     else:
                         trend = "stable"
