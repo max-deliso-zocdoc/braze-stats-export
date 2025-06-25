@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 from ..models import CanvasListResponse, CanvasDetails, RequestLog
-from ..utils import generate_canvas_url
 
 
 class CanvasStatistics:
@@ -193,17 +192,6 @@ class CanvasStatistics:
                 f"    - Steps Range: {complexity['min_steps']} - {complexity['max_steps']}"
             )
             report.append("")
-
-            # Add Canvas Dashboard Links section if canvas details are provided
-            if canvas_details:
-                report.append("🌐 CANVAS DASHBOARD LINKS:")
-                for detail in canvas_details:
-                    canvas_url = generate_canvas_url(detail.canvas_id)
-                    status_icon = "✅" if detail.enabled else "❌"
-                    report.append(
-                        f"  • {status_icon} {detail.name[:35]:35} | {canvas_url}"
-                    )
-                report.append("")
 
         report.append("=" * 70)
 
