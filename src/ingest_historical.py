@@ -4,6 +4,8 @@ This script pulls historical Canvas statistics from the Braze API for a specifie
 date range and stores them in JSONL files, one per Canvas ID. If data for the same
 date already exists, it will be replaced with the new data.
 
+This module is dedicated to data ingestion only. For forecasting, use forecast_quiet_dates.py.
+
 Usage:
     # Ingest last 60 days
     BRAZE_REST_KEY=your-key python src/ingest_historical.py --days 60

@@ -33,7 +33,7 @@ clean:
 	@pyenv virtualenv-delete -f $(VENV_NAME) || true
 
 forecast:
-	pyenv exec python -m src.forecast_quiet_dates --forecast-only --filter-prefix "transactional"
+	pyenv exec python -m src.forecast_quiet_dates --filter-prefix "transactional"
 
 ingest-historical:
 	pyenv exec python -m src.ingest_historical --days 90 --filter-prefix "transactional"

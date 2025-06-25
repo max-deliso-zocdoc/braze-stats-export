@@ -3,8 +3,7 @@
 This script analyzes existing Canvas data using regression analysis to predict
 when Canvas sends will decay to approximately zero (the "quiet date").
 
-Note: Daily ingestion functionality has been removed. Use ingest_historical.py
-for data collection.
+This module is dedicated to forecasting only. For data ingestion, use ingest_historical.py.
 
 Usage:
     # Generate forecasts from existing data
@@ -192,12 +191,6 @@ Examples:
     )
 
     parser.add_argument(
-        "--forecast-only",
-        action="store_true",
-        help="(Deprecated - daily ingestion removed) Run forecasting on existing data",
-    )
-
-    parser.add_argument(
         "--quiet-threshold",
         type=int,
         default=5,
@@ -232,7 +225,7 @@ Examples:
             print("✅ Sample data created successfully!")
             return
 
-        # Forecasting (daily ingestion has been removed)
+        # Forecasting (this module is dedicated to forecasting only)
         logger.info("🔮 Starting quiet date forecasting...")
 
         data_dir = Path("data")
