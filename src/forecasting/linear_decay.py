@@ -653,13 +653,6 @@ class QuietDatePredictor:
                 trend_counts.get(result.current_trend, 0) + 1
             )
 
-        # Metric usage analysis
-        metric_counts = {}
-        for result in results:
-            metric_counts[result.metric_used] = (
-                metric_counts.get(result.metric_used, 0) + 1
-            )
-
         # Confidence distribution
         high_confidence = [r for r in predictable if r.confidence >= 0.7]
         medium_confidence = [r for r in predictable if 0.4 <= r.confidence < 0.7]
@@ -674,26 +667,11 @@ class QuietDatePredictor:
                 "going_quiet_later": len(predictable_later),
             },
             "trends": trend_counts,
-            "metrics_used": metric_counts,
             "confidence_distribution": {
                 "high": len(high_confidence),
                 "medium": len(medium_confidence),
                 "low": len(low_confidence),
             },
-            "urgent_canvases": [
-                {
-                    "canvas_id": r.canvas_id,
-                    "canvas_name": r.canvas_name,
-                    "quiet_date": r.quiet_date.isoformat() if r.quiet_date else None,
-                    "days_to_quiet": r.days_to_quiet,
-                    "confidence": round(r.confidence, 3),
-                    "trend": r.current_trend,
-                    "metric_used": r.metric_used,
-                }
-                for r in sorted(predictable_soon, key=lambda x: x.days_to_quiet or 999)[
-                    :10
-                ]
-            ],
             "all_canvases": [
                 {
                     "canvas_id": r.canvas_id,
@@ -703,13 +681,11 @@ class QuietDatePredictor:
                     "confidence": round(r.confidence, 3),
                     "trend": r.current_trend,
                     "metric_used": r.metric_used,
-                    "r_squared": round(r.r_squared, 3),
                 }
                 for r in sorted(
                     results, key=lambda x: (x.days_to_quiet or 999, x.canvas_name)
                 )
             ],
-            "generated_at": datetime.now().isoformat(),
         }
 
         return report

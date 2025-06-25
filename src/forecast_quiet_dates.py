@@ -63,27 +63,21 @@ def print_forecast_summary(report: dict) -> None:
     all_canvases = report.get("all_canvases", [])
 
     print("\n" + "=" * 70)
-    print("🔮 CANVAS QUIET DATE FORECAST REPORT")
+    print("CANVAS QUIET DATE FORECAST REPORT")
     print("=" * 70)
 
-    print(f"\n📊 OVERVIEW:")
+    print(f"\nOVERVIEW:")
     print(f"  • Total Canvases Analyzed: {summary['total_canvases']}")
     print(f"  • Predictable Quiet Dates: {summary['predictable']}")
     print(f"  • Unpredictable: {summary['unpredictable']}")
     print(f"  • Going Quiet Soon (≤30 days): {summary['going_quiet_soon']}")
     print(f"  • Going Quiet Later (>30 days): {summary['going_quiet_later']}")
 
-    print(f"\n📈 CURRENT TRENDS:")
+    print(f"\nCURRENT TRENDS:")
     for trend, count in trends.items():
-        trend_emoji = {
-            "declining": "📉",
-            "stable": "📊",
-            "growing": "📈",
-            "insufficient_data": "❓",
-        }.get(trend, "❔")
-        print(f"  {trend_emoji} {trend.replace('_', ' ').title()}: {count}")
+        print(f"  • {trend.replace('_', ' ').title()}: {count}")
 
-    print(f"\n🎯 PREDICTION CONFIDENCE:")
+    print(f"\nPREDICTION CONFIDENCE:")
     print(f"  • High (≥70%): {confidence['high']}")
     print(f"  • Medium (40-70%): {confidence['medium']}")
     print(f"  • Low (<40%): {confidence['low']}")
@@ -95,7 +89,7 @@ def print_forecast_summary(report: dict) -> None:
     predictable_canvases.sort(key=lambda x: x.get("quiet_date", "9999-12-31"))
 
     if predictable_canvases:
-        print(f"\n📅 PREDICTED QUIET DATES (Sorted by Quiet Date)")
+        print(f"\nPREDICTED QUIET DATES (Sorted by Quiet Date)")
         print(
             "   Canvas Name                                                  Quiet Date     Days  Confidence  Trend"
         )
