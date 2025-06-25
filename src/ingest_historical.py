@@ -1,7 +1,8 @@
 """Historical Canvas data ingestion script.
 
 This script pulls historical Canvas statistics from the Braze API for a specified
-date range and stores them in append-only JSONL files, one per Canvas ID.
+date range and stores them in JSONL files, one per Canvas ID. If data for the same
+date already exists, it will be replaced with the new data.
 
 Usage:
     # Ingest last 60 days
@@ -351,13 +352,14 @@ def get_canvas_data_series(
 def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> int:
     """
     Append historical records to Canvas step-based directory structure.
+    If data for the same date already exists, it will be replaced with the new data.
 
     Args:
         canvas_id: Canvas ID
         daily_records: List of daily statistics dictionaries with step breakdown
 
     Returns:
-        Number of new records added across all steps
+        Number of new/updated records added across all steps
     """
     canvas_dir = DATA_DIR / canvas_id
     total_new_records = 0
@@ -399,29 +401,26 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
 
                 channel_file = step_dir / f"{channel}.jsonl"
 
-                # Read existing dates to avoid duplicates
-                existing_dates = set()
+                # Read existing records and filter out records with the same date
+                existing_records = []
+                records_replaced = 0
                 if channel_file.exists():
                     with channel_file.open("r") as f:
                         for line in f:
                             if line.strip():
                                 try:
                                     existing_record = json.loads(line)
-                                    existing_dates.add(existing_record.get("date"))
+                                    if existing_record.get("date") != date:
+                                        existing_records.append(existing_record)
+                                    else:
+                                        records_replaced += 1
                                 except json.JSONDecodeError:
                                     logger.warning(
                                         f"Skipping malformed line in {channel_file}"
                                     )
                                     continue
 
-                # Skip if this date already exists for this channel
-                if date in existing_dates:
-                    logger.debug(
-                        f"Data for {canvas_id}/{step_id}/{channel} on {date} already exists, skipping"
-                    )
-                    continue
-
-                # Prepare the channel record
+                # Prepare the new channel record
                 channel_record = {
                     "date": date,
                     "step_id": step_id,
@@ -437,14 +436,23 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
                     ]  # Usually first element contains the metrics
                     channel_record.update(metrics)
 
-                # Append the new record
-                with channel_file.open("a") as f:
-                    f.write(json.dumps(channel_record) + "\n")
+                # Add the new record to the list
+                existing_records.append(channel_record)
+
+                # Write all records back to the file (overwriting the entire file)
+                with channel_file.open("w") as f:
+                    for record in existing_records:
+                        f.write(json.dumps(record) + "\n")
 
                 total_new_records += 1
-                logger.debug(
-                    f"Added record for {canvas_id}/{step_id}/{channel} on {date}"
-                )
+                if records_replaced > 0:
+                    logger.debug(
+                        f"Updated record for {canvas_id}/{step_id}/{channel} on {date} (replaced {records_replaced} existing record(s))"
+                    )
+                else:
+                    logger.debug(
+                        f"Added new record for {canvas_id}/{step_id}/{channel} on {date}"
+                    )
 
     return total_new_records
 
@@ -477,7 +485,7 @@ def ingest_historical_data(
         success_count = 0
         partial_success_count = 0
         error_count = 0
-        total_records_added = 0
+        total_records_processed = 0
 
         for i, canvas_id in enumerate(canvas_ids, 1):
             canvas_name = name_mapping.get(canvas_id, "Unknown")
@@ -487,9 +495,9 @@ def ingest_historical_data(
                 daily_records = get_canvas_data_series(canvas_id, start_date, end_date)
 
                 if daily_records:
-                    # Append to JSONL file
-                    records_added = append_canvas_data(canvas_id, daily_records)
-                    total_records_added += records_added
+                    # Process and update JSONL file
+                    records_processed = append_canvas_data(canvas_id, daily_records)
+                    total_records_processed += records_processed
 
                     # Calculate expected vs actual records to detect partial failures
                     start_dt = dt.datetime.strptime(start_date, "%Y-%m-%d").date()
@@ -499,12 +507,12 @@ def ingest_historical_data(
                     if len(daily_records) == expected_days:
                         success_count += 1
                         logger.info(
-                            f"✓ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_added:3} new records | {len(daily_records):3}/{expected_days} days (complete)"
+                            f"✓ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_processed:3} records processed | {len(daily_records):3}/{expected_days} days (complete)"
                         )
                     else:
                         partial_success_count += 1
                         logger.warning(
-                            f"◐ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_added:3} new records | {len(daily_records):3}/{expected_days} days (partial)"
+                            f"◐ ({i}/{len(canvas_ids)}) {canvas_name[:30]:30} | {records_processed:3} records processed | {len(daily_records):3}/{expected_days} days (partial)"
                         )
                 else:
                     error_count += 1
@@ -536,7 +544,7 @@ def ingest_historical_data(
         logger.info(f"  • Complete success: {success_count}")
         logger.info(f"  • Partial success: {partial_success_count}")
         logger.info(f"  • Failed: {error_count}")
-        logger.info(f"  • Total new records added: {total_records_added}")
+        logger.info(f"  • Total records processed: {total_records_processed}")
         logger.info(f"  • Date range: {start_date} to {end_date}")
 
     except Exception as exc:
