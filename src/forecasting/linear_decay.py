@@ -9,18 +9,32 @@ import json
 import logging
 from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, NamedTuple
+from typing import List, Dict, Any, Optional, Tuple, NamedTuple, Set
 from dataclasses import dataclass
 import math
 from collections import defaultdict
 import os
 import requests
+from typing_extensions import TypedDict
 
 import numpy as np
 from scipy import stats
 from scipy.optimize import curve_fit
 
 logger = logging.getLogger(__name__)
+
+# Type definitions for better type checking
+class DailyAggregates(TypedDict):
+    total_sent: int
+    total_opens: int
+    total_unique_opens: int
+    total_clicks: int
+    total_unique_clicks: int
+    total_delivered: int
+    total_bounces: int
+    total_unsubscribes: int
+    active_steps: Set[str]
+    active_channels: Set[str]
 
 
 @dataclass
@@ -93,7 +107,7 @@ class StepBasedForecaster:
         self.min_data_points = min_data_points
 
     def load_canvas_metrics(
-        self, canvas_id: str, data_dir: Path = None
+        self, canvas_id: str, data_dir: Optional[Path] = None
     ) -> List[CanvasMetrics]:
         """Load and aggregate Canvas metrics from step-based directory structure."""
         data_dir = data_dir or Path("data")
@@ -104,7 +118,7 @@ class StepBasedForecaster:
             return []
 
         # Dictionary to aggregate metrics by date
-        daily_aggregates = defaultdict(
+        daily_aggregates: Dict[date, DailyAggregates] = defaultdict(
             lambda: {
                 "total_sent": 0,
                 "total_opens": 0,
@@ -231,7 +245,7 @@ class StepBasedForecaster:
         return a * np.exp(-b * x) + c
 
     def predict_quiet_date(
-        self, canvas_id: str, data_dir: Path = None
+        self, canvas_id: str, data_dir: Optional[Path] = None
     ) -> ForecastResult:
         """
         Predict the quiet date for a Canvas using aggregated step metrics.
@@ -266,7 +280,7 @@ class StepBasedForecaster:
             ("total_delivered", [m.total_delivered for m in canvas_metrics]),
         ]
 
-        best_result = None
+        best_result: Optional[ForecastResult] = None
         best_r_squared = -1
 
         for metric_name, y_values in metrics_to_try:
@@ -278,10 +292,10 @@ class StepBasedForecaster:
             dates = [m.date for m in canvas_metrics]
             base_date = dates[0]
             x_values = np.array([(d - base_date).days for d in dates])
-            y_values = np.array(y_values)
+            y_values_array = np.array(y_values)
 
             # Filter out days with zero values for exponential model
-            non_zero_mask = y_values > 0
+            non_zero_mask = y_values_array > 0
 
             # Try different models
             models = []
@@ -289,7 +303,7 @@ class StepBasedForecaster:
             # 1. Linear regression
             try:
                 slope, intercept, r_value, p_value, std_err = stats.linregress(
-                    x_values, y_values
+                    x_values, y_values_array
                 )
                 linear_r_squared = r_value**2
 
@@ -310,7 +324,7 @@ class StepBasedForecaster:
             if np.sum(non_zero_mask) >= self.min_data_points:
                 try:
                     x_nonzero = x_values[non_zero_mask]
-                    y_nonzero = y_values[non_zero_mask]
+                    y_nonzero = y_values_array[non_zero_mask]
 
                     # Initial guess for exponential decay
                     initial_guess = [y_nonzero[0], 0.1, self.quiet_threshold]
@@ -354,7 +368,7 @@ class StepBasedForecaster:
                 best_r_squared = best_model["r_squared"]
 
                 # Determine current trend
-                recent_values = y_values[-min(7, len(y_values)) :]  # Last week
+                recent_values = y_values_array[-min(7, len(y_values_array)) :]  # Last week
                 if len(recent_values) >= 2:
                     recent_trend = np.mean(np.diff(recent_values))
                     if recent_trend < -1:
@@ -367,8 +381,8 @@ class StepBasedForecaster:
                     trend = "insufficient_data"
 
                 # Predict quiet date
-                quiet_date = None
-                days_to_quiet = None
+                quiet_date: Optional[date] = None
+                days_to_quiet: Optional[int] = None
                 confidence = best_model["r_squared"]
 
                 if best_model["type"] == "linear":
@@ -451,7 +465,7 @@ class StepBasedForecaster:
 class QuietDatePredictor:
     """High-level interface for Canvas quiet date prediction using step-based data."""
 
-    def __init__(self, data_dir: Path = None, quiet_threshold: int = 5):
+    def __init__(self, data_dir: Optional[Path] = None, quiet_threshold: int = 5):
         """
         Initialize the predictor.
 
@@ -461,8 +475,8 @@ class QuietDatePredictor:
         """
         self.data_dir = data_dir or Path("data")
         self.forecaster = StepBasedForecaster(quiet_threshold=quiet_threshold)
-        self._canvas_names = None  # Cache for canvas names
-        self.canvas_name_filter = None  # Optional filter prefix for canvas names
+        self._canvas_names: Optional[Dict[str, str]] = None  # Cache for canvas names
+        self.canvas_name_filter: Optional[str] = None  # Optional filter prefix for canvas names
 
     def _get_canvas_name_mapping(self) -> Dict[str, str]:
         """Get a mapping of Canvas ID to Canvas name from saved index or Braze API."""
@@ -471,7 +485,7 @@ class QuietDatePredictor:
 
         # First try to load from saved canvas index
         index_path = self.data_dir / "canvas_index.json"
-        name_map = {}
+        name_map: Dict[str, str] = {}
 
         if index_path.exists():
             try:
@@ -572,120 +586,122 @@ class QuietDatePredictor:
         return name_map
 
     def predict_all_canvases(self) -> List[ForecastResult]:
-        """Predict quiet dates for all Canvases with step-based data."""
-        results = []
-
-        if not self.data_dir.exists():
-            logger.warning(f"Data directory {self.data_dir} does not exist")
-            return results
-
-        # Get canvas name mapping upfront
-        canvas_names = self._get_canvas_name_mapping()
-
-        # Find all Canvas directories
+        """Predict quiet dates for all available canvases."""
         canvas_dirs = [d for d in self.data_dir.iterdir() if d.is_dir()]
+        results: List[ForecastResult] = []
 
-        # Apply canvas name filter if specified
-        if self.canvas_name_filter:
-            filtered_dirs = []
-            for canvas_dir in canvas_dirs:
-                canvas_id = canvas_dir.name
-                canvas_name = canvas_names.get(canvas_id, canvas_id).lower()
-                if canvas_name.startswith(self.canvas_name_filter):
-                    filtered_dirs.append(canvas_dir)
-            canvas_dirs = filtered_dirs
-            logger.info(
-                f"Found {len(canvas_dirs)} Canvas data directories matching filter '{self.canvas_name_filter}'"
-            )
-        else:
-            logger.info(f"Found {len(canvas_dirs)} Canvas data directories")
+        logger.info(f"Analyzing {len(canvas_dirs)} Canvas directories...")
 
         for canvas_dir in canvas_dirs:
             canvas_id = canvas_dir.name
-            canvas_name = canvas_names.get(
-                canvas_id, canvas_id
-            )  # Fallback to ID if name not found
+
+            # Skip if we have a name filter and this canvas doesn't match
+            if self.canvas_name_filter:
+                canvas_name = self._get_canvas_name_mapping().get(canvas_id, "")
+                if not canvas_name.lower().startswith(self.canvas_name_filter.lower()):
+                    continue
 
             try:
                 result = self.forecaster.predict_quiet_date(canvas_id, self.data_dir)
-                # Replace the empty canvas_name with the actual name
-                result = result._replace(canvas_name=canvas_name)
+
+                # Add canvas name to result
+                canvas_name = self._get_canvas_name_mapping().get(canvas_id, canvas_id)
+                result = ForecastResult(
+                    canvas_id=result.canvas_id,
+                    canvas_name=canvas_name,
+                    quiet_date=result.quiet_date,
+                    confidence=result.confidence,
+                    r_squared=result.r_squared,
+                    days_to_quiet=result.days_to_quiet,
+                    current_trend=result.current_trend,
+                    model_params=result.model_params,
+                    metric_used=result.metric_used,
+                )
+
                 results.append(result)
 
                 if result.quiet_date:
                     logger.info(
-                        f"Canvas '{canvas_name}' ({canvas_id}): Predicted quiet date {result.quiet_date} "
-                        f"(confidence: {result.confidence:.2f}, trend: {result.current_trend}, metric: {result.metric_used})"
+                        f"Canvas {canvas_name} ({canvas_id}): "
+                        f"Quiet date {result.quiet_date} "
+                        f"(confidence: {result.confidence:.1%}, "
+                        f"trend: {result.current_trend})"
                     )
                 else:
                     logger.debug(
-                        f"Canvas '{canvas_name}' ({canvas_id}): Could not predict quiet date "
-                        f"(trend: {result.current_trend}, metric: {result.metric_used})"
+                        f"Canvas {canvas_name} ({canvas_id}): "
+                        f"No quiet date predicted "
+                        f"(trend: {result.current_trend})"
                     )
 
             except Exception as e:
-                logger.error(
-                    f"Error predicting quiet date for Canvas '{canvas_name}' ({canvas_id}): {e}"
-                )
+                logger.error(f"Error predicting quiet date for Canvas {canvas_id}: {e}")
+                continue
 
+        logger.info(f"Completed analysis of {len(results)} canvases")
         return results
 
     def generate_forecast_report(self) -> Dict[str, Any]:
         """Generate a comprehensive forecast report."""
         results = self.predict_all_canvases()
 
-        # Categorize results
-        predictable = [r for r in results if r.quiet_date is not None]
-        unpredictable = [r for r in results if r.quiet_date is None]
+        # Calculate summary statistics
+        total_canvases = len(results)
+        predictable = sum(1 for r in results if r.quiet_date is not None)
+        unpredictable = total_canvases - predictable
 
-        # Sort predictable by days to quiet
-        predictable_soon = [
-            r for r in predictable if r.days_to_quiet and r.days_to_quiet <= 30
-        ]
-        predictable_later = [
-            r for r in predictable if r.days_to_quiet and r.days_to_quiet > 30
-        ]
-
-        # Trend analysis
-        trend_counts = {}
+        # Count canvases going quiet soon (≤30 days) vs later
+        going_quiet_soon = 0
+        going_quiet_later = 0
         for result in results:
-            trend_counts[result.current_trend] = (
-                trend_counts.get(result.current_trend, 0) + 1
-            )
+            if result.quiet_date and result.days_to_quiet:
+                if result.days_to_quiet <= 30:
+                    going_quiet_soon += 1
+                else:
+                    going_quiet_later += 1
 
-        # Confidence distribution
-        high_confidence = [r for r in predictable if r.confidence >= 0.7]
-        medium_confidence = [r for r in predictable if 0.4 <= r.confidence < 0.7]
-        low_confidence = [r for r in predictable if r.confidence < 0.4]
+        # Analyze trends
+        trend_counts: Dict[str, int] = {}
+        for result in results:
+            trend = result.current_trend
+            trend_counts[trend] = trend_counts.get(trend, 0) + 1
 
-        report = {
+        # Analyze confidence distribution
+        confidence_distribution = {"high": 0, "medium": 0, "low": 0}
+        for result in results:
+            if result.confidence >= 0.7:
+                confidence_distribution["high"] += 1
+            elif result.confidence >= 0.4:
+                confidence_distribution["medium"] += 1
+            else:
+                confidence_distribution["low"] += 1
+
+        # Prepare detailed results
+        all_canvases = []
+        for result in results:
+            canvas_data = {
+                "canvas_id": result.canvas_id,
+                "canvas_name": result.canvas_name,
+                "quiet_date": result.quiet_date.isoformat() if result.quiet_date else None,
+                "days_to_quiet": result.days_to_quiet,
+                "confidence": result.confidence,
+                "r_squared": result.r_squared,
+                "trend": result.current_trend,
+                "metric_used": result.metric_used,
+                "model_params": result.model_params,
+            }
+            all_canvases.append(canvas_data)
+
+        return {
             "summary": {
-                "total_canvases": len(results),
-                "predictable": len(predictable),
-                "unpredictable": len(unpredictable),
-                "going_quiet_soon": len(predictable_soon),  # Within 30 days
-                "going_quiet_later": len(predictable_later),
+                "total_canvases": total_canvases,
+                "predictable": predictable,
+                "unpredictable": unpredictable,
+                "going_quiet_soon": going_quiet_soon,
+                "going_quiet_later": going_quiet_later,
             },
             "trends": trend_counts,
-            "confidence_distribution": {
-                "high": len(high_confidence),
-                "medium": len(medium_confidence),
-                "low": len(low_confidence),
-            },
-            "all_canvases": [
-                {
-                    "canvas_id": r.canvas_id,
-                    "canvas_name": r.canvas_name,
-                    "quiet_date": r.quiet_date.isoformat() if r.quiet_date else None,
-                    "days_to_quiet": r.days_to_quiet,
-                    "confidence": round(r.confidence, 3),
-                    "trend": r.current_trend,
-                    "metric_used": r.metric_used,
-                }
-                for r in sorted(
-                    results, key=lambda x: (x.days_to_quiet or 999, x.canvas_name)
-                )
-            ],
+            "confidence_distribution": confidence_distribution,
+            "all_canvases": all_canvases,
+            "generated_at": datetime.now().isoformat(),
         }
-
-        return report

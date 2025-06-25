@@ -20,7 +20,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Final, List, Dict, Any
+from typing import Final, List, Dict, Any, Optional
 import time
 
 import requests
@@ -42,7 +42,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def save_forecast_report(report: dict, filename: str = None) -> None:
+def save_forecast_report(report: dict, filename: Optional[str] = None) -> None:
     """Save forecast report to JSON file."""
     if filename is None:
         timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -120,7 +120,7 @@ def create_sample_data() -> None:
     logger.info("Creating sample data for testing...")
 
     # Create sample data for 3 Canvas IDs
-    sample_canvases = [
+    sample_canvases: List[Dict[str, Any]] = [
         {"id": "sample-declining-canvas", "initial_sends": 1000, "trend": "declining"},
         {"id": "sample-stable-canvas", "initial_sends": 500, "trend": "stable"},
         {"id": "sample-growing-canvas", "initial_sends": 200, "trend": "growing"},
@@ -129,9 +129,9 @@ def create_sample_data() -> None:
     base_date = date.today() - timedelta(days=30)
 
     for canvas in sample_canvases:
-        canvas_id = canvas["id"]
-        initial_sends = canvas["initial_sends"]
-        trend = canvas["trend"]
+        canvas_id: str = canvas["id"]
+        initial_sends: int = canvas["initial_sends"]
+        trend: str = canvas["trend"]
 
         jsonl_path = data_dir / f"{canvas_id}.jsonl"
 

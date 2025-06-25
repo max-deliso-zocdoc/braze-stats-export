@@ -24,7 +24,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Final, List, Dict, Any
+from typing import Final, List, Dict, Any, Optional
 import time
 
 import requests
@@ -60,12 +60,12 @@ def get_api_config():
     return {"api_key": api_key, "headers": {"Authorization": f"Bearer {api_key}"}}
 
 
-def get_canvas_ids(filter_prefix: str = None) -> List[str]:
+def get_canvas_ids(filter_prefix: Optional[str] = None) -> List[str]:
     """Fetch all Canvas IDs from the Braze API with pagination support."""
     api_config = get_api_config()
     headers = api_config["headers"]
 
-    ids = []
+    ids: List[str] = []
     page = 0
     limit = 100
 
@@ -119,12 +119,12 @@ def get_canvas_ids(filter_prefix: str = None) -> List[str]:
     return ids
 
 
-def get_canvas_name_mapping(filter_prefix: str = None) -> Dict[str, str]:
+def get_canvas_name_mapping(filter_prefix: Optional[str] = None) -> Dict[str, str]:
     """Get a mapping of Canvas ID to Canvas name for better logging."""
     api_config = get_api_config()
     headers = api_config["headers"]
 
-    name_map = {}
+    name_map: Dict[str, str] = {}
     page = 0
     limit = 100
 
@@ -253,7 +253,7 @@ def get_canvas_data_chunk(
             continue
 
         # Create the normalized record with step breakdown
-        normalized_record = {
+        normalized_record: Dict[str, Any] = {
             "date": stat_date.isoformat(),
             "total_stats": {
                 "entries": total_stats.get("entries", 0),
@@ -404,7 +404,7 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
                 channel_file = step_dir / f"{channel}.jsonl"
 
                 # Read existing records and filter out records with the same date
-                existing_records = []
+                existing_records: List[Dict[str, Any]] = []
                 records_replaced = 0
                 if channel_file.exists():
                     with channel_file.open("r") as f:
@@ -433,9 +433,7 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
 
                 # Add all the message metrics
                 if len(channel_data) > 0:
-                    metrics = channel_data[
-                        0
-                    ]  # Usually first element contains the metrics
+                    metrics = channel_data[0]  # Usually first element contains the metrics
                     channel_record.update(metrics)
 
                 # Add the new record to the list
@@ -460,7 +458,7 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
 
 
 def ingest_historical_data(
-    start_date: str, end_date: str, filter_prefix: str = None
+    start_date: str, end_date: str, filter_prefix: Optional[str] = None
 ) -> None:
     """
     Main function to ingest historical data for all Canvas IDs.
