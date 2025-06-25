@@ -693,6 +693,15 @@ class QuietDatePredictor:
             }
             all_canvases.append(canvas_data)
 
+        # Calculate averages for predictable canvases
+        predictable_results = [r for r in results if r.quiet_date is not None and r.days_to_quiet is not None]
+        if predictable_results:
+            avg_days_to_quiet = sum(r.days_to_quiet for r in predictable_results) / len(predictable_results)
+            avg_confidence = sum(r.confidence for r in predictable_results) / len(predictable_results)
+        else:
+            avg_days_to_quiet = 0
+            avg_confidence = 0
+
         return {
             "summary": {
                 "total_canvases": total_canvases,
@@ -700,6 +709,9 @@ class QuietDatePredictor:
                 "unpredictable": unpredictable,
                 "going_quiet_soon": going_quiet_soon,
                 "going_quiet_later": going_quiet_later,
+                "prediction_rate": (predictable / total_canvases) if total_canvases else 0,
+                "avg_days_to_quiet": avg_days_to_quiet,
+                "avg_confidence": avg_confidence,
             },
             "trends": trend_counts,
             "confidence_distribution": confidence_distribution,
