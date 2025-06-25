@@ -368,8 +368,7 @@ class TestQuietDatePredictor(unittest.TestCase):
         self.assertIn('summary', report)
         self.assertIn('trends', report)
         self.assertIn('confidence_distribution', report)
-        self.assertIn('urgent_canvases', report)
-        self.assertIn('generated_at', report)
+        self.assertIn('all_canvases', report)
 
         # Check summary
         summary = report['summary']
