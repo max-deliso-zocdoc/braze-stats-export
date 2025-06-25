@@ -9,8 +9,8 @@ Usage:
     # Generate forecasts from existing data
     python src/forecast_quiet_dates.py
 
-    # Create sample data for testing
-    python src/forecast_quiet_dates.py --create-sample-data
+    # Forecast only transactional canvases
+    python src/forecast_quiet_dates.py --filter-prefix "transactional"
 """
 
 import argparse
@@ -19,7 +19,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -50,116 +50,37 @@ def save_forecast_report(report: dict, filename: Optional[str] = None) -> None:
 
 
 def print_forecast_summary(report: dict) -> None:
-    """Print a human-readable summary of the forecast report."""
+    """Print a summary of the forecast report to stdout."""
     summary = report["summary"]
     trends = report["trends"]
-    confidence = report["confidence_distribution"]
-    all_canvases = report.get("all_canvases", [])
 
-    print("\n" + "=" * 70)
-    print("CANVAS QUIET DATE FORECAST REPORT")
-    print("=" * 70)
+    print("\n" + "=" * 60)
+    print("FORECAST SUMMARY")
+    print("=" * 60)
+    print(f"Total Canvases Analyzed: {summary['total_canvases']}")
+    print(f"Predictable Canvases: {summary['predictable']}")
+    print(f"Unpredictable Canvases: {summary['unpredictable']}")
+    print(f"Prediction Rate: {summary['prediction_rate']:.1%}")
 
-    print("\nOVERVIEW:")
-    print(f"  • Total Canvases Analyzed: {summary['total_canvases']}")
-    print(f"  • Predictable Quiet Dates: {summary['predictable']}")
-    print(f"  • Unpredictable: {summary['unpredictable']}")
-    print(f"  • Going Quiet Soon (≤30 days): {summary['going_quiet_soon']}")
-    print(f"  • Going Quiet Later (>30 days): {summary['going_quiet_later']}")
+    if summary["predictable"] > 0:
+        print(f"\nAverage Days to Quiet: {summary['avg_days_to_quiet']:.1f}")
+        print(f"Average Confidence: {summary['avg_confidence']:.1%}")
 
-    print("\nCURRENT TRENDS:")
+    print("\nTrend Distribution:")
     for trend, count in trends.items():
-        print(f"  • {trend.replace('_', ' ').title()}: {count}")
+        if count > 0:
+            percentage = (count / summary["total_canvases"]) * 100
+            print(f"  {trend.capitalize()}: {count} ({percentage:.1f}%)")
 
-    print("\nPREDICTION CONFIDENCE:")
-    print(f"  • High (≥70%): {confidence['high']}")
-    print(f"  • Medium (40-70%): {confidence['medium']}")
-    print(f"  • Low (<40%): {confidence['low']}")
+    if summary["predictable"] > 0:
+        print("\nConfidence Distribution:")
+        confidence_dist = report["confidence_distribution"]
+        for confidence_range, count in confidence_dist.items():
+            if count > 0:
+                percentage = (count / summary["predictable"]) * 100
+                print(f"  {confidence_range}: {count} ({percentage:.1f}%)")
 
-    # Filter canvases with predicted quiet dates and sort by quiet date (ascending)
-    predictable_canvases = [
-        canvas for canvas in all_canvases if canvas.get("quiet_date")
-    ]
-    predictable_canvases.sort(key=lambda x: x.get("quiet_date", "9999-12-31"))
-
-    if predictable_canvases:
-        print("\nPREDICTED QUIET DATES (Sorted by Quiet Date)")
-        print(
-            "   Canvas Name                                                  Quiet Date     Days  Confidence  Trend"
-        )
-        print("   " + "-" * 105)
-        for canvas in predictable_canvases:
-            canvas_name = canvas.get("canvas_name", canvas["canvas_id"])[:60]
-            quiet_date = (
-                canvas["quiet_date"][:10] if canvas["quiet_date"] else "Unknown"
-            )
-            days = str(canvas["days_to_quiet"]) if canvas["days_to_quiet"] else "N/A"
-            confidence = f"{canvas['confidence']:.1%}"
-            trend = canvas["trend"][:10]
-
-            print("   {:60} {:10}  {:>4}  {:9}  {:10}".format(canvas_name, quiet_date, days, confidence, trend))
-
-    print("\n" + "=" * 70)
-
-
-def create_sample_data() -> None:
-    """Create sample time-series data for testing purposes."""
-    from datetime import date, timedelta
-    import random
-
-    data_dir = Path("data")
-    data_dir.mkdir(exist_ok=True)
-
-    logger.info("Creating sample data for testing...")
-
-    # Create sample data for 3 Canvas IDs
-    sample_canvases: List[Dict[str, Any]] = [
-        {"id": "sample-declining-canvas", "initial_sends": 1000, "trend": "declining"},
-        {"id": "sample-stable-canvas", "initial_sends": 500, "trend": "stable"},
-        {"id": "sample-growing-canvas", "initial_sends": 200, "trend": "growing"},
-    ]
-
-    base_date = date.today() - timedelta(days=30)
-
-    for canvas in sample_canvases:
-        canvas_id: str = canvas["id"]
-        initial_sends: int = canvas["initial_sends"]
-        trend: str = canvas["trend"]
-
-        jsonl_path = data_dir / f"{canvas_id}.jsonl"
-
-        with jsonl_path.open("w") as f:
-            for i in range(30):  # 30 days of data
-                current_date = base_date + timedelta(days=i)
-
-                if trend == "declining":
-                    sends = max(
-                        0, int(initial_sends * (1 - i * 0.05) + random.randint(-50, 50))
-                    )
-                elif trend == "stable":
-                    sends = max(0, int(initial_sends + random.randint(-100, 100)))
-                else:  # growing
-                    sends = max(
-                        0, int(initial_sends * (1 + i * 0.02) + random.randint(-30, 30))
-                    )
-
-                entries = int(sends * 1.05 + random.randint(0, 20))
-                delivered = int(sends * 0.95 + random.randint(-10, 10))
-                opens = int(sends * 0.15 + random.randint(-5, 5))
-                conversions = int(sends * 0.02 + random.randint(0, 2))
-
-                record = {
-                    "date": current_date.isoformat(),
-                    "entries": max(0, entries),
-                    "sends": max(0, sends),
-                    "delivered": max(0, delivered),
-                    "opens": max(0, opens),
-                    "conversions": max(0, conversions),
-                }
-
-                f.write(json.dumps(record) + "\n")
-
-        logger.info(f"Created sample data for {canvas_id} ({trend} trend)")
+    print("=" * 60)
 
 
 def main():
@@ -171,9 +92,6 @@ def main():
 Examples:
   # Generate forecasts from existing data
   python src/forecast_quiet_dates.py
-
-  # Create sample data for testing
-  python src/forecast_quiet_dates.py --create-sample-data
 
   # Forecast only transactional canvases
   python src/forecast_quiet_dates.py --filter-prefix "transactional"
@@ -192,12 +110,6 @@ Examples:
 
     parser.add_argument("--output", help="Output filename for forecast report JSON")
 
-    parser.add_argument(
-        "--create-sample-data",
-        action="store_true",
-        help="Create sample time-series data for testing",
-    )
-
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
     parser.add_argument(
@@ -212,19 +124,13 @@ Examples:
         logging.getLogger().setLevel(logging.DEBUG)
 
     try:
-        # Create sample data if requested
-        if args.create_sample_data:
-            create_sample_data()
-            print("Sample data created successfully!")
-            return
-
         # Forecasting (this module is dedicated to forecasting only)
         logger.info("Starting quiet date forecasting...")
 
         data_dir = Path("data")
         if not data_dir.exists():
             logger.error(
-                "Data directory does not exist. Run data ingestion first or use --create-sample-data"
+                "Data directory does not exist. Run data ingestion first."
             )
             sys.exit(1)
 
