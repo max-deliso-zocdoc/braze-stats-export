@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, NamedTuple, Set
+from typing import List, Dict, Any, Optional, NamedTuple, Set
 from dataclasses import dataclass
 import math
 from collections import defaultdict
@@ -21,9 +21,10 @@ import numpy as np
 from scipy import stats
 from scipy.optimize import curve_fit
 
+
 logger = logging.getLogger(__name__)
 
-# Type definitions for better type checking
+
 class DailyAggregates(TypedDict):
     total_sent: int
     total_opens: int

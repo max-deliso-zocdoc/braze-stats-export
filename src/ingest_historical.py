@@ -532,12 +532,7 @@ def ingest_historical_data(
 
                 # Progress update every 10 canvases
                 if i % 10 == 0:
-                    total_processed = (
-                        success_count + partial_success_count + error_count
-                    )
-                    logger.info(
-                        f"Progress: {i}/{len(canvas_ids)} processed | ✓ {success_count} complete | ◐ {partial_success_count} partial | ✗ {error_count} failed"
-                    )
+                    print("Progress update: processed {} canvases".format(i))
 
         # Summary
         logger.info(f"Historical ingestion complete:")

@@ -94,7 +94,6 @@ class BrazeAPIClient:
 
         Args:
             include_archived: Whether to include archived canvases (defaults to False)
-            sort_direction: Sort direction - 'desc' for newest first, 'asc' for oldest first (defaults to 'desc')
 
         Returns:
             CanvasListResponse containing all canvases

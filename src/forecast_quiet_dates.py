@@ -17,16 +17,11 @@ import argparse
 import datetime as dt
 import json
 import logging
-import os
 import sys
 from pathlib import Path
-from typing import Final, List, Dict, Any, Optional
-import time
+from typing import List, Dict, Any, Optional
 
-import requests
 from dotenv import load_dotenv
-from tenacity import retry, stop_after_attempt, wait_exponential
-
 
 from .forecasting.linear_decay import QuietDatePredictor
 
@@ -65,18 +60,18 @@ def print_forecast_summary(report: dict) -> None:
     print("CANVAS QUIET DATE FORECAST REPORT")
     print("=" * 70)
 
-    print(f"\nOVERVIEW:")
+    print("\nOVERVIEW:")
     print(f"  • Total Canvases Analyzed: {summary['total_canvases']}")
     print(f"  • Predictable Quiet Dates: {summary['predictable']}")
     print(f"  • Unpredictable: {summary['unpredictable']}")
     print(f"  • Going Quiet Soon (≤30 days): {summary['going_quiet_soon']}")
     print(f"  • Going Quiet Later (>30 days): {summary['going_quiet_later']}")
 
-    print(f"\nCURRENT TRENDS:")
+    print("\nCURRENT TRENDS:")
     for trend, count in trends.items():
         print(f"  • {trend.replace('_', ' ').title()}: {count}")
 
-    print(f"\nPREDICTION CONFIDENCE:")
+    print("\nPREDICTION CONFIDENCE:")
     print(f"  • High (≥70%): {confidence['high']}")
     print(f"  • Medium (40-70%): {confidence['medium']}")
     print(f"  • Low (<40%): {confidence['low']}")
@@ -102,9 +97,7 @@ def print_forecast_summary(report: dict) -> None:
             confidence = f"{canvas['confidence']:.1%}"
             trend = canvas["trend"][:10]
 
-            print(
-                f"   {canvas_name:60} {quiet_date:10}  {days:>4}  {confidence:9}  {trend:10}"
-            )
+            print("   {:60} {:10}  {:>4}  {:9}  {:10}".format(canvas_name, quiet_date, days, confidence, trend))
 
     print("\n" + "=" * 70)
 
@@ -222,11 +215,11 @@ Examples:
         # Create sample data if requested
         if args.create_sample_data:
             create_sample_data()
-            print("✅ Sample data created successfully!")
+            print("Sample data created successfully!")
             return
 
         # Forecasting (this module is dedicated to forecasting only)
-        logger.info("🔮 Starting quiet date forecasting...")
+        logger.info("Starting quiet date forecasting...")
 
         data_dir = Path("data")
         if not data_dir.exists():
@@ -263,13 +256,13 @@ Examples:
         # Display summary
         print_forecast_summary(report)
 
-        logger.info("✅ Forecasting completed successfully!")
+        logger.info("Forecasting completed successfully!")
 
     except KeyboardInterrupt:
-        logger.info("⏹️  Process interrupted by user")
+        logger.info("Process interrupted by user")
         sys.exit(1)
     except Exception as e:
-        logger.error(f"❌ Fatal error: {e}")
+        logger.error(f"Fatal error: {e}")
         sys.exit(1)
 
 
