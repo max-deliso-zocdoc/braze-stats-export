@@ -77,7 +77,7 @@ def print_forecast_summary(report: dict) -> None:
         confidence_dist = report["confidence_distribution"]
         for confidence_range, count in confidence_dist.items():
             if count > 0:
-                percentage = (count / summary["predictable"]) * 100
+                percentage = (count / summary["total_canvases"]) * 100
                 print(f"  {confidence_range}: {count} ({percentage:.1f}%)")
 
     print("=" * 60)

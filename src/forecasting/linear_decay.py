@@ -18,6 +18,7 @@ import requests
 from typing_extensions import TypedDict
 
 import numpy as np
+import pandas as pd
 from scipy import stats
 
 
@@ -87,6 +88,90 @@ class ForecastResult(NamedTuple):
     metric_used: str  # Which metric was used for forecasting
 
 
+def _read_all_jsonl(canvas_dir: Path) -> pd.DataFrame:
+    """Read all JSONL files in the canvas directory structure into a single DataFrame."""
+    # Collect DataFrames for each file
+    dfs: list[pd.DataFrame] = []
+    for jsonl_path in canvas_dir.rglob("*.jsonl"):        # walks step/channel folders
+        if jsonl_path.stat().st_size == 0:
+            continue
+
+        # Build two helper columns so we can compute "active steps/channels" later
+        step_id     = jsonl_path.parent.name              # .../step_id/channel.jsonl
+        channel_key = f"{step_id}:{jsonl_path.stem}"
+
+        df = pd.read_json(jsonl_path, lines=True)
+        df["step_id"]   = step_id
+        df["chan_key"]  = channel_key
+        dfs.append(df)
+
+    if not dfs:
+        return pd.DataFrame()          # empty safeguard
+    return pd.concat(dfs, ignore_index=True)
+
+
+def _pandas_aggregate(canvas_dir: Path, canvas_id: str) -> List[CanvasMetrics]:
+    """Vectorized aggregation using pandas pipeline."""
+    # Read all JSONL files in one shot
+    raw = _read_all_jsonl(canvas_dir)
+    if raw.empty:
+        return []
+
+    # Parse & normalise dates in bulk
+    raw["date"] = pd.to_datetime(raw["date"], errors="coerce").dt.normalize()  # midnight
+    raw = raw.dropna(subset=["date"])                                          # toss bad rows
+
+    # Fill missing columns with 0 (for channels that don't have certain metrics)
+    metric_columns = [
+        "sent", "opens", "unique_opens", "clicks", "unique_clicks",
+        "delivered", "bounces", "unsubscribes"
+    ]
+    for col in metric_columns:
+        if col not in raw.columns:
+            raw[col] = 0
+        else:
+            raw[col] = raw[col].fillna(0).astype(int)
+
+    # Aggregate with one groupby.agg
+    agg = (raw
+           .groupby("date")
+           .agg(
+               total_sent          = ("sent",            "sum"),
+               total_opens         = ("opens",           "sum"),
+               total_unique_opens  = ("unique_opens",    "sum"),
+               total_clicks        = ("clicks",          "sum"),
+               total_unique_clicks = ("unique_clicks",   "sum"),
+               total_delivered     = ("delivered",       "sum"),
+               total_bounces       = ("bounces",         "sum"),
+               total_unsubscribes  = ("unsubscribes",    "sum"),
+               active_steps        = ("step_id",         "nunique"),
+               active_channels     = ("chan_key",        "nunique"),
+           )
+           .reset_index()
+           .sort_values("date")
+    )
+
+    # Convert rows → CanvasMetrics objects
+    result: list[CanvasMetrics] = [
+        CanvasMetrics(
+            date              = row.date.date(),      # convert Timestamp → date
+            canvas_id         = canvas_id,
+            total_sent        = int(row.total_sent),
+            total_opens       = int(row.total_opens),
+            total_unique_opens= int(row.total_unique_opens),
+            total_clicks      = int(row.total_clicks),
+            total_unique_clicks=int(row.total_unique_clicks),
+            total_delivered   = int(row.total_delivered),
+            total_bounces     = int(row.total_bounces),
+            total_unsubscribes= int(row.total_unsubscribes),
+            active_steps      = int(row.active_steps),
+            active_channels   = int(row.active_channels),
+        )
+        for row in agg.itertuples(index=False)
+    ]
+    return result
+
+
 class StepBasedForecaster:
     """
     Linear decay model for forecasting Canvas quiet dates using step-based data.
@@ -117,122 +202,15 @@ class StepBasedForecaster:
             logger.warning(f"No data directory found for Canvas {canvas_id}")
             return []
 
-        # Dictionary to aggregate metrics by date
-        daily_aggregates: Dict[date, DailyAggregates] = defaultdict(
-            lambda: {
-                "total_sent": 0,
-                "total_opens": 0,
-                "total_unique_opens": 0,
-                "total_clicks": 0,
-                "total_unique_clicks": 0,
-                "total_delivered": 0,
-                "total_bounces": 0,
-                "total_unsubscribes": 0,
-                "active_steps": set(),
-                "active_channels": set(),
-            }
-        )
-
         try:
-            # Iterate through all step directories
-            for step_dir in canvas_dir.iterdir():
-                if not step_dir.is_dir():
-                    continue
-
-                step_id = step_dir.name
-
-                # Process each channel file in the step
-                for channel_file in step_dir.iterdir():
-                    if not channel_file.is_file() or not channel_file.name.endswith(
-                        ".jsonl"
-                    ):
-                        continue
-
-                    channel_name = channel_file.stem
-
-                    # Read the channel data
-                    with channel_file.open("r") as f:
-                        for line in f:
-                            if not line.strip():
-                                continue
-
-                            try:
-                                record = json.loads(line)
-                                record_date = record.get("date")
-
-                                if not record_date:
-                                    continue
-
-                                # Parse date
-                                try:
-                                    parsed_date = datetime.strptime(
-                                        record_date, "%Y-%m-%d"
-                                    ).date()
-                                except ValueError:
-                                    logger.warning(
-                                        f"Invalid date format: {record_date}"
-                                    )
-                                    continue
-
-                                # Aggregate metrics for this date
-                                day_data = daily_aggregates[parsed_date]
-                                day_data["total_sent"] += record.get("sent", 0)
-                                day_data["total_opens"] += record.get("opens", 0)
-                                day_data["total_unique_opens"] += record.get(
-                                    "unique_opens", 0
-                                )
-                                day_data["total_clicks"] += record.get("clicks", 0)
-                                day_data["total_unique_clicks"] += record.get(
-                                    "unique_clicks", 0
-                                )
-                                day_data["total_delivered"] += record.get(
-                                    "delivered", 0
-                                )
-                                day_data["total_bounces"] += record.get("bounces", 0)
-                                day_data["total_unsubscribes"] += record.get(
-                                    "unsubscribes", 0
-                                )
-                                day_data["active_steps"].add(step_id)
-                                day_data["active_channels"].add(
-                                    f"{step_id}:{channel_name}"
-                                )
-
-                            except json.JSONDecodeError as e:
-                                logger.warning(
-                                    f"Error parsing JSON in {channel_file}: {e}"
-                                )
-                                continue
-
+            canvas_metrics = _pandas_aggregate(canvas_dir, canvas_id)
+            logger.debug(
+                f"Loaded {len(canvas_metrics)} days of aggregated data for Canvas {canvas_id}"
+            )
+            return canvas_metrics
         except Exception as e:
             logger.error(f"Error loading data for Canvas {canvas_id}: {e}")
             return []
-
-        # Convert aggregated data to CanvasMetrics objects
-        canvas_metrics = []
-        for date_key, metrics in daily_aggregates.items():
-            canvas_metric = CanvasMetrics(
-                date=date_key,
-                canvas_id=canvas_id,
-                total_sent=metrics["total_sent"],
-                total_opens=metrics["total_opens"],
-                total_unique_opens=metrics["total_unique_opens"],
-                total_clicks=metrics["total_clicks"],
-                total_unique_clicks=metrics["total_unique_clicks"],
-                total_delivered=metrics["total_delivered"],
-                total_bounces=metrics["total_bounces"],
-                total_unsubscribes=metrics["total_unsubscribes"],
-                active_steps=len(metrics["active_steps"]),
-                active_channels=len(metrics["active_channels"]),
-            )
-            canvas_metrics.append(canvas_metric)
-
-        # Sort by date (oldest first)
-        canvas_metrics.sort(key=lambda x: x.date)
-        logger.debug(
-            f"Loaded {len(canvas_metrics)} days of aggregated data for Canvas {canvas_id}"
-        )
-
-        return canvas_metrics
 
     def _linear_decay_func(self, x: np.ndarray, a: float, b: float) -> np.ndarray:
         """Linear decay function: y = ax + b"""
