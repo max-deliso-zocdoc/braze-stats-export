@@ -141,3 +141,4 @@ cython_debug/
 
 *.log
 *.json
+plots/
