@@ -491,13 +491,6 @@ class StepBasedForecaster:
                         except (ValueError, ZeroDivisionError):
                             pass
 
-                # Adjust confidence based on data quality
-                if len(canvas_metrics) < 14:
-                    confidence *= 0.7  # Reduce confidence for limited data
-
-                if trend == "growing":
-                    confidence *= 0.5  # Reduce confidence if trend is growing
-
                 best_result = ForecastResult(
                     canvas_id=canvas_id,
                     canvas_name="",
