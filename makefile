@@ -1,4 +1,4 @@
-.PHONY: setup venv install lint test fmt clean forecast ingest-historical typecheck check visualization visualization-save fmt-fix clean-imports auto-fix check-fix
+.PHONY: setup venv install lint test fmt clean forecast ingest-historical typecheck check visualization-save fmt-fix clean-imports auto-fix check-fix
 
 PYTHON_VERSION ?= 3.11.4
 VENV_NAME      ?= braze-extractor-env
@@ -56,10 +56,7 @@ forecast:
 	pyenv exec python -m src.forecast_quiet_dates --filter-prefix "transactional"
 
 ingest-historical:
-	pyenv exec python -m src.ingest_historical --days 90 --filter-prefix "transactional"
-
-visualization:
-	pyenv exec python -m src.visualization.main --overview
+	pyenv exec python -m src.ingest_historical --days 90 --filter-contains "1 day" "1 week" "3 hr"
 
 visualization-save:
-	pyenv exec python -m src.visualization.main --multi-model --output plots/ --no-display
+	pyenv exec python -m src.visualization.main --multi-model --output plots/ --no-display --filter-contains "1 day" "1 week" "3 hr"

@@ -96,6 +96,18 @@ Examples:
   # Forecast only transactional canvases
   python src/forecast_quiet_dates.py --filter-prefix "transactional"
 
+  # Forecast canvases with multiple prefixes (OR logic)
+  python src/forecast_quiet_dates.py --filter-prefixes "Welcome" "Campaign"
+
+  # Forecast canvases containing specific strings
+  python src/forecast_quiet_dates.py --filter-contains "email" "sms"
+
+  # Forecast specific canvases by exact name
+  python src/forecast_quiet_dates.py --filter-exact "Welcome Series" "Campaign 1"
+
+  # Combine multiple filter types (OR logic between types, OR logic within each type)
+  python src/forecast_quiet_dates.py --filter-prefixes "Welcome" --filter-contains "email"
+
   # Forecast canvases starting with specific prefix
   python src/forecast_quiet_dates.py --filter-prefix "welcome" --verbose
         """,
@@ -116,6 +128,27 @@ Examples:
         "--filter-prefix",
         type=str,
         help="Only analyze canvases whose names start with this prefix (case-insensitive)",
+    )
+
+    parser.add_argument(
+        "--filter-prefixes",
+        type=str,
+        nargs="+",
+        help="Only analyze canvases whose names start with any of these prefixes (case-insensitive, OR logic)",
+    )
+
+    parser.add_argument(
+        "--filter-contains",
+        type=str,
+        nargs="+",
+        help="Only analyze canvases whose names contain any of these strings (case-insensitive, OR logic)",
+    )
+
+    parser.add_argument(
+        "--filter-exact",
+        type=str,
+        nargs="+",
+        help="Only analyze canvases whose names exactly match any of these strings (case-insensitive, OR logic)",
     )
 
     args = parser.parse_args()
@@ -148,9 +181,13 @@ Examples:
             data_dir=data_dir, quiet_threshold=args.quiet_threshold
         )
 
-        # Apply canvas name filter if specified
-        if args.filter_prefix:
-            predictor.canvas_name_filter = args.filter_prefix.lower()
+        # Apply canvas name filters if specified
+        predictor.set_canvas_filters(
+            filter_prefix=args.filter_prefix,
+            filter_prefixes=args.filter_prefixes,
+            filter_contains=args.filter_contains,
+            filter_exact=args.filter_exact,
+        )
 
         report = predictor.generate_forecast_report()
 

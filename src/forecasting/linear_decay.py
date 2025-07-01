@@ -560,6 +560,7 @@ class StepBasedForecaster:
 
 class QuietDatePredictor:
     """High-level interface for Canvas quiet date prediction using step-based data."""
+    canvas_name_filters: 'Optional[Dict[str, list[str]]]'
 
     def __init__(self, data_dir: Optional[Path] = None, quiet_threshold: int = 5):
         """
@@ -567,14 +568,94 @@ class QuietDatePredictor:
 
         Args:
             data_dir: Directory containing step-based Canvas data
+                (default: Path('data'))
             quiet_threshold: Daily sends below this are considered "quiet"
         """
         self.data_dir = data_dir or Path("data")
         self.forecaster = StepBasedForecaster(quiet_threshold=quiet_threshold)
         self._canvas_names: Optional[Dict[str, str]] = None  # Cache for canvas names
-        self.canvas_name_filter: Optional[str] = (
-            None  # Optional filter prefix for canvas names
-        )
+        self.canvas_name_filter: Optional[str] = None  # Optional filter prefix for canvas names
+        # (backward compatibility)
+        # Multiple filter types for canvas name filtering
+        self.canvas_name_filters = None
+
+    def set_canvas_filters(
+        self,
+        filter_prefix: Optional[str] = None,
+        filter_prefixes: Optional[list[str]] = None,
+        filter_contains: Optional[list[str]] = None,
+        filter_exact: Optional[list[str]] = None,
+    ) -> None:
+        """
+        Set multiple canvas name filters.
+
+        Args:
+            filter_prefix: Single prefix filter (backward compatibility)
+            filter_prefixes: List of prefixes to match (OR logic)
+            filter_contains: List of strings that must be contained (OR logic)
+            filter_exact: List of exact name matches (OR logic)
+        """
+        self.canvas_name_filters = {}
+
+        if filter_prefix:
+            self.canvas_name_filters["prefix"] = [filter_prefix]
+            self.canvas_name_filter = filter_prefix  # Backward compatibility
+
+        if filter_prefixes:
+            self.canvas_name_filters["prefixes"] = filter_prefixes
+
+        if filter_contains:
+            self.canvas_name_filters["contains"] = filter_contains
+
+        if filter_exact:
+            self.canvas_name_filters["exact"] = filter_exact
+
+    def _matches_canvas_filters(self, canvas_name: str) -> bool:
+        """
+        Check if a canvas name matches any of the configured filters.
+
+        Args:
+            canvas_name: The canvas name to check
+
+        Returns:
+            True if the canvas matches any filter, False otherwise
+        """
+        if not self.canvas_name_filters and not self.canvas_name_filter:
+            return True  # No filters set, include all canvases
+
+        canvas_name_lower = canvas_name.lower()
+
+        # Check single prefix filter (backward compatibility)
+        if self.canvas_name_filter:
+            if canvas_name_lower.startswith(self.canvas_name_filter.lower()):
+                return True
+
+        # Check multiple filters
+        if self.canvas_name_filters:
+            # Check prefix filters
+            if "prefix" in self.canvas_name_filters:
+                for prefix in self.canvas_name_filters["prefix"]:
+                    if canvas_name_lower.startswith(prefix.lower()):
+                        return True
+
+            if "prefixes" in self.canvas_name_filters:
+                for prefix in self.canvas_name_filters["prefixes"]:
+                    if canvas_name_lower.startswith(prefix.lower()):
+                        return True
+
+            # Check contains filters
+            if "contains" in self.canvas_name_filters:
+                for contains_str in self.canvas_name_filters["contains"]:
+                    if contains_str.lower() in canvas_name_lower:
+                        return True
+
+            # Check exact match filters
+            if "exact" in self.canvas_name_filters:
+                for exact_str in self.canvas_name_filters["exact"]:
+                    if canvas_name_lower == exact_str.lower():
+                        return True
+
+        return False
 
     def _get_canvas_name_mapping(self) -> Dict[str, str]:
         """Get a mapping of Canvas ID to Canvas name from saved index or Braze API."""
@@ -693,11 +774,10 @@ class QuietDatePredictor:
         for canvas_dir in canvas_dirs:
             canvas_id = canvas_dir.name
 
-            # Skip if we have a name filter and this canvas doesn't match
-            if self.canvas_name_filter:
-                canvas_name = self._get_canvas_name_mapping().get(canvas_id, "")
-                if not canvas_name.lower().startswith(self.canvas_name_filter.lower()):
-                    continue
+            # Skip if we have filters and this canvas doesn't match
+            canvas_name = self._get_canvas_name_mapping().get(canvas_id, "")
+            if not self._matches_canvas_filters(canvas_name):
+                continue
 
             try:
                 result = self.forecaster.predict_quiet_date(canvas_id, self.data_dir)
@@ -750,11 +830,10 @@ class QuietDatePredictor:
         for canvas_dir in canvas_dirs:
             canvas_id = canvas_dir.name
 
-            # Skip if we have a name filter and this canvas doesn't match
-            if self.canvas_name_filter:
-                canvas_name = self._get_canvas_name_mapping().get(canvas_id, "")
-                if not canvas_name.lower().startswith(self.canvas_name_filter.lower()):
-                    continue
+            # Skip if we have filters and this canvas doesn't match
+            canvas_name = self._get_canvas_name_mapping().get(canvas_id, "")
+            if not self._matches_canvas_filters(canvas_name):
+                continue
 
             try:
                 multi_result = self.forecaster.predict_quiet_date_all_models(canvas_id, self.data_dir)

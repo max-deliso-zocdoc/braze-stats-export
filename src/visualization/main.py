@@ -38,7 +38,7 @@ def create_multi_model_forecast_plots(
     output_dir: Path,
     metric_col: str = "total_sent",
     quiet_threshold: int = 5,
-    horizon_days: int = 180,
+    horizon_days: int = 365,
     name_map: Optional[dict] = None,
     show_plot: bool = False,
 ) -> None:
@@ -113,8 +113,11 @@ def load_canvas_data(
     max_canvases: Optional[int] = None,
     metric_col: str = "total_sent",
     filter_prefix: Optional[str] = None,
+    filter_prefixes: Optional[list[str]] = None,
+    filter_contains: Optional[list[str]] = None,
+    filter_exact: Optional[list[str]] = None,
 ) -> dict:
-    """Load canvas data from the data directory, optionally filtering by name prefix."""
+    """Load canvas data from the data directory, optionally filtering by canvas names."""
     forecaster = StepBasedForecaster(quiet_threshold=5)
     canvas_dirs = [d for d in data_dir.iterdir() if d.is_dir()]
     name_map = get_canvas_name_mapping(data_dir)
@@ -123,18 +126,65 @@ def load_canvas_data(
         logging.error("No canvas directories found in %s", data_dir)
         return {}
 
-    # Filter by prefix if specified
-    if filter_prefix:
-        filter_prefix = filter_prefix.lower()
+    # Apply filters if specified
+    if filter_prefix or filter_prefixes or filter_contains or filter_exact:
         filtered = []
+        filter_count = 0
+
         for d in canvas_dirs:
             canvas_id = d.name
             canvas_name = name_map.get(canvas_id, "")
-            if canvas_name.lower().startswith(filter_prefix):
+            canvas_name_lower = canvas_name.lower()
+
+            # Check if canvas matches any filter
+            matches = False
+
+            # Single prefix filter (backward compatibility)
+            if filter_prefix and canvas_name_lower.startswith(filter_prefix.lower()):
+                matches = True
+
+            # Multiple prefix filters
+            if filter_prefixes:
+                for prefix in filter_prefixes:
+                    if canvas_name_lower.startswith(prefix.lower()):
+                        matches = True
+                        break
+
+            # Contains filters
+            if filter_contains:
+                for contains_str in filter_contains:
+                    if contains_str.lower() in canvas_name_lower:
+                        matches = True
+                        break
+
+            # Exact match filters
+            if filter_exact:
+                for exact_str in filter_exact:
+                    if canvas_name_lower == exact_str.lower():
+                        matches = True
+                        break
+
+            if matches:
                 filtered.append(d)
+                filter_count += 1
+
         canvas_dirs = filtered
+
+        # Log filter summary
+        filter_types = []
+        if filter_prefix:
+            filter_types.append(f"prefix '{filter_prefix}'")
+        if filter_prefixes:
+            filter_types.append(f"prefixes {filter_prefixes}")
+        if filter_contains:
+            filter_types.append(f"contains {filter_contains}")
+        if filter_exact:
+            filter_types.append(f"exact {filter_exact}")
+
         logging.info(
-            "Filtered to %d canvases with prefix '%s'", len(canvas_dirs), filter_prefix
+            "Filtered to %d canvases matching: %s",
+            filter_count,
+            ", ".join(filter_types)
         )
 
     if max_canvases:
@@ -186,6 +236,21 @@ Examples:
 
   # Create plots with different metric
   python -m src.visualization.main --metric total_opens --output plots/
+
+  # Filter by canvas name prefix
+  python -m src.visualization.main --filter-prefix "Welcome" --output plots/
+
+  # Filter by multiple prefixes (OR logic)
+  python -m src.visualization.main --filter-prefixes "Welcome" "Campaign" --output plots/
+
+  # Filter by canvas names containing specific strings
+  python -m src.visualization.main --filter-contains "email" "sms" --output plots/
+
+  # Filter by exact canvas name matches
+  python -m src.visualization.main --filter-exact "Welcome Series" "Campaign 1" --output plots/
+
+  # Combine multiple filter types (OR logic between types, OR logic within each type)
+  python -m src.visualization.main --filter-prefixes "Welcome" --filter-contains "email" --output plots/
         """,
     )
 
@@ -229,8 +294,8 @@ Examples:
     parser.add_argument(
         "--horizon-days",
         type=int,
-        default=180,
-        help="Number of days to predict into the future (default: 180)",
+        default=365,
+        help="Number of days to predict into the future (default: 365)",
     )
 
     parser.add_argument(
@@ -257,6 +322,27 @@ Examples:
         "--filter-prefix",
         type=str,
         help="Only analyze canvases whose names start with this prefix (case-insensitive)",
+    )
+
+    parser.add_argument(
+        "--filter-prefixes",
+        type=str,
+        nargs="+",
+        help="Only analyze canvases whose names start with any of these prefixes (case-insensitive, OR logic)",
+    )
+
+    parser.add_argument(
+        "--filter-contains",
+        type=str,
+        nargs="+",
+        help="Only analyze canvases whose names contain any of these strings (case-insensitive, OR logic)",
+    )
+
+    parser.add_argument(
+        "--filter-exact",
+        type=str,
+        nargs="+",
+        help="Only analyze canvases whose names exactly match any of these strings (case-insensitive, OR logic)",
     )
 
     args = parser.parse_args()
@@ -287,7 +373,13 @@ Examples:
     else:
         # Multiple canvas mode
         canvas_data = load_canvas_data(
-            args.data_dir, args.max_canvases, args.metric, args.filter_prefix
+            args.data_dir,
+            args.max_canvases,
+            args.metric,
+            args.filter_prefix,
+            args.filter_prefixes,
+            args.filter_contains,
+            args.filter_exact
         )
         if not canvas_data:
             logging.error("No canvas data found")

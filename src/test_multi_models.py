@@ -88,7 +88,7 @@ def test_multi_model_forecasting():
                         metrics=metrics,
                         metric_col="total_sent",
                         quiet_threshold=5,
-                        horizon_days=180,
+                        horizon_days=365,
                         save_path=Path(f"plots/multi_model_forecast_{canvas_id}.png"),
                         show_plot=False
                     )

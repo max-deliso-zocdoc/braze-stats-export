@@ -60,7 +60,12 @@ def get_api_config():
     return {"api_key": api_key, "headers": {"Authorization": f"Bearer {api_key}"}}
 
 
-def get_canvas_ids(filter_prefix: Optional[str] = None) -> List[str]:
+def get_canvas_ids(
+    filter_prefix: Optional[str] = None,
+    filter_prefixes: Optional[List[str]] = None,
+    filter_contains: Optional[List[str]] = None,
+    filter_exact: Optional[List[str]] = None,
+) -> List[str]:
     """Fetch all Canvas IDs from the Braze API with pagination support."""
     api_config = get_api_config()
     headers = api_config["headers"]
@@ -70,8 +75,20 @@ def get_canvas_ids(filter_prefix: Optional[str] = None) -> List[str]:
     limit = 100
 
     logger.info("Fetching Canvas IDs (excluding archived, newest first)...")
+
+    # Log filter information
+    filter_types = []
     if filter_prefix:
-        logger.info(f"Filtering canvases by name prefix: '{filter_prefix}'")
+        filter_types.append(f"prefix '{filter_prefix}'")
+    if filter_prefixes:
+        filter_types.append(f"prefixes {filter_prefixes}")
+    if filter_contains:
+        filter_types.append(f"contains {filter_contains}")
+    if filter_exact:
+        filter_types.append(f"exact {filter_exact}")
+
+    if filter_types:
+        logger.info(f"Filtering canvases by: {', '.join(filter_types)}")
 
     while True:
         params = {
@@ -90,13 +107,41 @@ def get_canvas_ids(filter_prefix: Optional[str] = None) -> List[str]:
 
         canvas_batch = data.get("canvases", [])
 
-        # Filter by prefix if specified
-        if filter_prefix:
-            filtered_batch = [
-                c
-                for c in canvas_batch
-                if c.get("name", "").lower().startswith(filter_prefix.lower())
-            ]
+        # Apply filters if specified
+        if filter_prefix or filter_prefixes or filter_contains or filter_exact:
+            filtered_batch = []
+            for c in canvas_batch:
+                canvas_name = c.get("name", "").lower()
+                matches = False
+
+                # Single prefix filter (backward compatibility)
+                if filter_prefix and canvas_name.startswith(filter_prefix.lower()):
+                    matches = True
+
+                # Multiple prefix filters
+                if filter_prefixes:
+                    for prefix in filter_prefixes:
+                        if canvas_name.startswith(prefix.lower()):
+                            matches = True
+                            break
+
+                # Contains filters
+                if filter_contains:
+                    for contains_str in filter_contains:
+                        if contains_str.lower() in canvas_name:
+                            matches = True
+                            break
+
+                # Exact match filters
+                if filter_exact:
+                    for exact_str in filter_exact:
+                        if canvas_name == exact_str.lower():
+                            matches = True
+                            break
+
+                if matches:
+                    filtered_batch.append(c)
+
             ids.extend(c["id"] for c in filtered_batch)
             logger.debug(
                 f"Retrieved {len(filtered_batch)} Canvas IDs from page {page} (filtered from {len(canvas_batch)})"
@@ -114,12 +159,17 @@ def get_canvas_ids(filter_prefix: Optional[str] = None) -> List[str]:
         page += 1
 
     logger.info(f"Found {len(ids)} total active Canvas IDs (newest first)")
-    if filter_prefix:
-        logger.info(f"After filtering by prefix '{filter_prefix}': {len(ids)} canvases")
+    if filter_types:
+        logger.info(f"After filtering: {len(ids)} canvases")
     return ids
 
 
-def get_canvas_name_mapping(filter_prefix: Optional[str] = None) -> Dict[str, str]:
+def get_canvas_name_mapping(
+    filter_prefix: Optional[str] = None,
+    filter_prefixes: Optional[List[str]] = None,
+    filter_contains: Optional[List[str]] = None,
+    filter_exact: Optional[List[str]] = None,
+) -> Dict[str, str]:
     """Get a mapping of Canvas ID to Canvas name for better logging."""
     api_config = get_api_config()
     headers = api_config["headers"]
@@ -144,10 +194,38 @@ def get_canvas_name_mapping(filter_prefix: Optional[str] = None) -> Dict[str, st
 
         canvas_batch = data.get("canvases", [])
 
-        # Filter by prefix if specified
-        if filter_prefix:
+        # Apply filters if specified
+        if filter_prefix or filter_prefixes or filter_contains or filter_exact:
             for canvas in canvas_batch:
-                if canvas.get("name", "").lower().startswith(filter_prefix.lower()):
+                canvas_name = canvas.get("name", "").lower()
+                matches = False
+
+                # Single prefix filter (backward compatibility)
+                if filter_prefix and canvas_name.startswith(filter_prefix.lower()):
+                    matches = True
+
+                # Multiple prefix filters
+                if filter_prefixes:
+                    for prefix in filter_prefixes:
+                        if canvas_name.startswith(prefix.lower()):
+                            matches = True
+                            break
+
+                # Contains filters
+                if filter_contains:
+                    for contains_str in filter_contains:
+                        if contains_str.lower() in canvas_name:
+                            matches = True
+                            break
+
+                # Exact match filters
+                if filter_exact:
+                    for exact_str in filter_exact:
+                        if canvas_name == exact_str.lower():
+                            matches = True
+                            break
+
+                if matches:
                     name_map[canvas["id"]] = canvas["name"]
         else:
             for canvas in canvas_batch:
@@ -468,7 +546,12 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
 
 
 def ingest_historical_data(
-    start_date: str, end_date: str, filter_prefix: Optional[str] = None
+    start_date: str,
+    end_date: str,
+    filter_prefix: Optional[str] = None,
+    filter_prefixes: Optional[List[str]] = None,
+    filter_contains: Optional[List[str]] = None,
+    filter_exact: Optional[List[str]] = None,
 ) -> None:
     """
     Main function to ingest historical data for all Canvas IDs.
@@ -477,20 +560,39 @@ def ingest_historical_data(
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
         filter_prefix: Optional prefix to filter Canvas names (case-insensitive)
+        filter_prefixes: Optional list of prefixes to filter Canvas names (OR logic)
+        filter_contains: Optional list of strings that Canvas names must contain (OR logic)
+        filter_exact: Optional list of exact Canvas name matches (OR logic)
     """
     logger.info(
         f"Starting historical Canvas data ingestion from {start_date} to {end_date}"
     )
+
+    # Log filter information
+    filter_types = []
     if filter_prefix:
-        logger.info(f"Filtering canvases by name prefix: '{filter_prefix}'")
+        filter_types.append(f"prefix '{filter_prefix}'")
+    if filter_prefixes:
+        filter_types.append(f"prefixes {filter_prefixes}")
+    if filter_contains:
+        filter_types.append(f"contains {filter_contains}")
+    if filter_exact:
+        filter_types.append(f"exact {filter_exact}")
+
+    if filter_types:
+        logger.info(f"Filtering canvases by: {', '.join(filter_types)}")
 
     try:
         # Get Canvas IDs and names
-        canvas_ids = get_canvas_ids(filter_prefix)
+        canvas_ids = get_canvas_ids(
+            filter_prefix, filter_prefixes, filter_contains, filter_exact
+        )
         logger.info(f"Processing {len(canvas_ids)} Canvas IDs")
 
         # Get name mapping for better reporting
-        name_mapping = get_canvas_name_mapping(filter_prefix)
+        name_mapping = get_canvas_name_mapping(
+            filter_prefix, filter_prefixes, filter_contains, filter_exact
+        )
 
         success_count = 0
         partial_success_count = 0
@@ -567,8 +669,9 @@ def ingest_historical_data(
         logger.info("  • Complete success: {}".format(success_count))
         logger.info("  • Partial success: {}".format(partial_success_count))
         logger.info("  • Failed: {}".format(error_count))
-        logger.info("  • Total records processed: {}".format(total_records_processed))
-        logger.info("  • Date range: {} to {}".format(start_date, end_date))
+        logger.info("• Records: %s", total_records_processed)  # noqa: E501
+        msg = "• Range: %s to %s"
+        logger.info(msg, start_date, end_date)
 
     except Exception as exc:
         logger.error("Fatal error during historical ingestion: {}".format(exc))
@@ -590,6 +693,19 @@ Examples:
 
   # Ingest only canvases with names starting with "Campaign"
   BRAZE_REST_KEY=your-key python src/ingest_historical.py --days 30 --filter-prefix Campaign
+
+  # Ingest canvases with multiple prefixes (OR logic)
+  BRAZE_REST_KEY=your-key python src/ingest_historical.py --days 30 --filter-prefixes "Welcome" "Campaign"
+
+  # Ingest canvases containing specific strings
+  BRAZE_REST_KEY=your-key python src/ingest_historical.py --days 30 --filter-contains "email" "sms"
+
+  # Ingest specific canvases by exact name
+  BRAZE_REST_KEY=your-key python src/ingest_historical.py --days 30 --filter-exact "Welcome Series" "Campaign 1"
+
+  # Combine multiple filter types (OR logic between types, OR logic within each type)
+  BRAZE_REST_KEY=your-key python src/ingest_historical.py --days 30 \
+          --filter-prefixes "Welcome" --filter-contains "email"
 
   # Ingest specific date range with filter
   BRAZE_REST_KEY=your-key python src/ingest_historical.py --start-date 2023-11-01 \
@@ -613,6 +729,27 @@ Examples:
         "--filter-prefix",
         type=str,
         help="Only ingest canvases whose names start with this prefix (case-insensitive)",
+    )
+
+    parser.add_argument(
+        "--filter-prefixes",
+        type=str,
+        nargs="+",
+        help="Only ingest canvases whose names start with any of these prefixes (case-insensitive, OR logic)",
+    )
+
+    parser.add_argument(
+        "--filter-contains",
+        type=str,
+        nargs="+",
+        help="Only ingest canvases whose names contain any of these strings (case-insensitive, OR logic)",
+    )
+
+    parser.add_argument(
+        "--filter-exact",
+        type=str,
+        nargs="+",
+        help="Only ingest canvases whose names exactly match any of these strings (case-insensitive, OR logic)",
     )
 
     args = parser.parse_args()
@@ -653,7 +790,14 @@ Examples:
             sys.exit(1)
 
     try:
-        ingest_historical_data(start_date_str, end_date_str, args.filter_prefix)
+        ingest_historical_data(
+            start_date_str,
+            end_date_str,
+            args.filter_prefix,
+            args.filter_prefixes,
+            args.filter_contains,
+            args.filter_exact
+        )
         logger.info("✅ Historical ingestion completed successfully!")
 
     except KeyboardInterrupt:

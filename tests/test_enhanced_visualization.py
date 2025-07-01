@@ -31,11 +31,11 @@ class TestEnhancedVisualization(unittest.TestCase):
                 plots_dir = Path("plots")
                 plots_dir.mkdir(exist_ok=True)
                 plot_path = plots_dir / f"enhanced_multi_model_{canvas_id}.png"
-                plot_canvas_forecast_all_models(
+                result = plot_canvas_forecast_all_models(
                     metrics=metrics,
                     metric_col="total_sent",
                     quiet_threshold=5,
-                    horizon_days=180,
+                    horizon_days=365,
                     save_path=plot_path,
                     show_plot=False
                 )

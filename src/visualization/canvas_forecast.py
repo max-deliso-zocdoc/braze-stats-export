@@ -300,7 +300,7 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
 def _generate_predictions(
     forecast_result: ForecastResult,
     df: pd.DataFrame,
-    horizon_days: int = 180
+    horizon_days: int = 365
 ) -> Tuple[pd.DataFrame, np.ndarray]:
     """
     Generate future predictions based on the forecast result.
@@ -308,11 +308,14 @@ def _generate_predictions(
     Args:
         forecast_result: The forecast result from the sophisticated forecasting logic
         df: DataFrame with historical data
-        horizon_days: Number of days to predict into the future
+        horizon_days: Number of days to predict into the future (max 365)
 
     Returns:
         Tuple of (prediction band DataFrame, future dates array)
     """
+    # Enforce maximum horizon of one year
+    horizon_days = min(horizon_days, 365)
+
     if not forecast_result.model_params:
         # Return empty predictions if no model
         future_dates = pd.date_range(
@@ -386,7 +389,7 @@ def plot_canvas_forecast(
     metrics: List[CanvasMetrics],
     metric_col: str = "total_sent",
     quiet_threshold: int = 5,
-    horizon_days: int = 180,
+    horizon_days: int = 365,
     figsize: Tuple[int, int] = (12, 6),
     save_path: Optional[Path] = None,
     show_plot: bool = True,
@@ -398,7 +401,7 @@ def plot_canvas_forecast(
         metrics: List of CanvasMetrics objects
         metric_col: Column name to analyze (default: "total_sent")
         quiet_threshold: Daily sends below this are considered "quiet"
-        horizon_days: Number of days to predict into the future
+        horizon_days: Number of days to predict into the future (max 365)
         figsize: Figure size (width, height)
         save_path: Optional path to save the plot
         show_plot: Whether to display the plot
@@ -406,6 +409,9 @@ def plot_canvas_forecast(
     Returns:
         Predicted quiet date (if any) or None
     """
+    # Enforce maximum horizon of one year
+    horizon_days = min(horizon_days, 365)
+
     if not metrics:
         print("No metrics data provided")
         return None
@@ -485,6 +491,12 @@ def plot_canvas_forecast(
     plt.xlabel("Date")
     plt.legend()
     plt.grid(True, alpha=0.3)
+
+    # Set x-axis limits to maximum one year from the last data point
+    last_data_date = df["date"].max()
+    max_future_date = last_data_date + pd.Timedelta(days=365)
+    plt.xlim(df["date"].min(), max_future_date)
+
     plt.tight_layout()
 
     # Save if requested
@@ -691,7 +703,7 @@ def plot_canvas_forecast_all_models(
     metrics: List[CanvasMetrics],
     metric_col: str = "total_sent",
     quiet_threshold: int = 5,
-    horizon_days: int = 180,
+    horizon_days: int = 365,
     figsize: Tuple[int, int] = (14, 10),
     save_path: Optional[Path] = None,
     show_plot: bool = True,
@@ -703,7 +715,7 @@ def plot_canvas_forecast_all_models(
         metrics: List of CanvasMetrics objects
         metric_col: Column name to analyze (default: "total_sent")
         quiet_threshold: Daily sends below this are considered "quiet"
-        horizon_days: Number of days to predict into the future
+        horizon_days: Number of days to predict into the future (max 365)
         figsize: Figure size (width, height)
         save_path: Optional path to save the plot
         show_plot: Whether to display the plot
@@ -711,6 +723,9 @@ def plot_canvas_forecast_all_models(
     Returns:
         MultiForecastResult with all predictions (if any) or None
     """
+    # Enforce maximum horizon of one year
+    horizon_days = min(horizon_days, 365)
+
     if not metrics:
         print("No metrics data provided")
         return None
@@ -851,6 +866,12 @@ def plot_canvas_forecast_all_models(
     plt.ylabel("Metric Values")
     plt.xlabel("Date")
     plt.grid(True, alpha=0.3)
+
+    # Set x-axis limits to maximum one year from the last data point
+    last_data_date = df["date"].max()
+    max_future_date = last_data_date + pd.Timedelta(days=365)
+    plt.xlim(df["date"].min(), max_future_date)
+
     plt.tight_layout()
 
     if save_path:
