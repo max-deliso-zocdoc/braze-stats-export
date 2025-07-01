@@ -227,6 +227,7 @@ Examples:
                 quiet_threshold=args.quiet_threshold,
                 max_canvases=args.max_canvases or 9,
                 save_path=save_path,
+                show_plot=not args.no_display,
             )
         elif args.output:
             # Create individual plots for all canvases
@@ -240,6 +241,7 @@ Examples:
                 metric_col=args.metric,
                 quiet_threshold=args.quiet_threshold,
                 name_map=name_map,
+                show_plot=not args.no_display,
             )
         else:
             # Show individual plot for first canvas
@@ -256,7 +258,7 @@ Examples:
             )
 
             if quiet_date:
-                logging.info("Predicted quiet date: %s", quiet_date.date())
+                logging.info("Predicted quiet date: %s", quiet_date)
             else:
                 logging.info("No quiet date predicted")
 

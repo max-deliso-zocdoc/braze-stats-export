@@ -268,7 +268,11 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
     return best_result
 
 
-def _generate_predictions(forecast_result: ForecastResult, df: pd.DataFrame, horizon_days: int = 180) -> Tuple[pd.DataFrame, np.ndarray]:
+def _generate_predictions(
+    forecast_result: ForecastResult,
+    df: pd.DataFrame,
+    horizon_days: int = 180
+) -> Tuple[pd.DataFrame, np.ndarray]:
     """
     Generate future predictions based on the forecast result.
 
@@ -475,6 +479,7 @@ def plot_multiple_canvases(
     max_canvases: int = 9,
     figsize: Tuple[int, int] = (15, 10),
     save_path: Optional[Path] = None,
+    show_plot: bool = True,
 ) -> None:
     """
     Create subplots for multiple canvases.
@@ -594,7 +599,10 @@ def plot_multiple_canvases(
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
         print(f"Multi-canvas plot saved to {save_path}")
 
-    plt.show()
+    if show_plot:
+        plt.show()
+    else:
+        plt.close()
 
 
 def sanitize_filename(name: str) -> str:
@@ -610,6 +618,7 @@ def create_forecast_report_plots(
     metric_col: str = "total_sent",
     quiet_threshold: int = 5,
     name_map: Optional[dict] = None,
+    show_plot: bool = True,
 ) -> None:
     """
     Create and save forecast plots for multiple canvases, using canvas name in filename if available.
@@ -620,6 +629,7 @@ def create_forecast_report_plots(
         metric_col: Column name to analyze
         quiet_threshold: Daily sends below this are considered "quiet"
         name_map: Optional dict mapping canvas_id to canvas name
+        show_plot: Whether to display the multi-canvas overview plot
     """
     output_dir.mkdir(exist_ok=True)
     name_map = name_map or {}
@@ -640,21 +650,9 @@ def create_forecast_report_plots(
                 metric_col=metric_col,
                 quiet_threshold=quiet_threshold,
                 save_path=plot_path,
-                show_plot=False,
+                show_plot=show_plot,
             )
         except Exception as e:
             print(f"Error creating plot for {canvas_id}: {e}")
-
-    # Create multi-canvas overview plot
-    try:
-        multi_plot_path = output_dir / "multi_canvas_overview.png"
-        plot_multiple_canvases(
-            canvas_data,
-            metric_col=metric_col,
-            quiet_threshold=quiet_threshold,
-            save_path=multi_plot_path,
-        )
-    except Exception as e:
-        print(f"Error creating multi-canvas plot: {e}")
 
     print(f"Forecast plots saved to {output_dir}")

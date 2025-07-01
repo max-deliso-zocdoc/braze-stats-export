@@ -59,7 +59,7 @@ ingest-historical:
 	pyenv exec python -m src.ingest_historical --days 90 --filter-prefix "transactional"
 
 visualization:
-	pyenv exec python -m src.visualization.main --overview --max-canvases 9
+	pyenv exec python -m src.visualization.main --overview
 
 visualization-save:
-	pyenv exec python -m src.visualization.main --output plots/ --overview --max-canvases 9
+	pyenv exec python -m src.visualization.main --output plots/ --no-display
