@@ -10,7 +10,7 @@ from typing import Optional
 
 from ..forecasting.linear_decay import StepBasedForecaster
 from .canvas_forecast import (create_forecast_report_plots,
-                              plot_canvas_forecast, plot_multiple_canvases,
+                              plot_canvas_forecast, plot_canvas_forecast_all_models, plot_multiple_canvases,
                               validate_canvas_data)
 
 
@@ -31,6 +31,81 @@ def get_canvas_name_mapping(data_dir: Path) -> dict:
         with open(index_path, "r") as f:
             return json.load(f)
     return {}
+
+
+def create_multi_model_forecast_plots(
+    canvas_data: dict,
+    output_dir: Path,
+    metric_col: str = "total_sent",
+    quiet_threshold: int = 5,
+    horizon_days: int = 180,
+    name_map: Optional[dict] = None,
+    show_plot: bool = False,
+) -> None:
+    """
+    Create multi-model forecast plots for all canvases.
+
+    Args:
+        canvas_data: Dictionary mapping canvas_id to CanvasMetrics list
+        output_dir: Directory to save plots
+        metric_col: Metric column to analyze
+        quiet_threshold: Daily sends below this are considered "quiet"
+        horizon_days: Number of days to predict into the future
+        name_map: Optional mapping of canvas_id to canvas_name
+        show_plot: Whether to display plots
+    """
+    output_dir.mkdir(exist_ok=True)
+
+    logging.info(f"Creating multi-model forecast plots for {len(canvas_data)} canvases...")
+
+    successful_plots = 0
+    failed_plots = 0
+
+    for canvas_id, metrics in canvas_data.items():
+        try:
+            # Get canvas name for filename
+            canvas_name = name_map.get(canvas_id, canvas_id) if name_map else canvas_id
+            safe_name = "".join(c for c in canvas_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+            safe_name = safe_name.replace(' ', '_')
+
+            # Create filename
+            filename = f"multi_model_forecast_{canvas_id}_{safe_name}.png"
+            save_path = output_dir / filename
+
+            logging.info(f"Generating multi-model forecast for {canvas_name} ({canvas_id})")
+
+            # Generate multi-model forecast plot
+            multi_result = plot_canvas_forecast_all_models(
+                metrics=metrics,
+                metric_col=metric_col,
+                quiet_threshold=quiet_threshold,
+                horizon_days=horizon_days,
+                save_path=save_path,
+                show_plot=show_plot,
+            )
+
+            if multi_result and multi_result.forecasts:
+                logging.info(f"  Generated {len(multi_result.forecasts)} forecasts")
+                if multi_result.best_forecast and multi_result.best_forecast.quiet_date:
+                    logging.info(
+                        f"  Best forecast: {multi_result.best_forecast.quiet_date} "
+                        f"({multi_result.best_forecast.model_type}, "
+                        f"R²={multi_result.best_forecast.r_squared:.2f})"
+                    )
+                successful_plots += 1
+            else:
+                logging.warning(f"  No successful forecasts for {canvas_name}")
+                failed_plots += 1
+
+        except Exception as e:
+            logging.error(f"Error generating multi-model forecast for {canvas_id}: {e}")
+            failed_plots += 1
+
+    logging.info("Multi-model forecast plots completed:")
+    logging.info(f"  Successful: {successful_plots}")
+    logging.info(f"  Failed: {failed_plots}")
+    logging.info(f"  Total: {len(canvas_data)}")
+    logging.info(f"  Plots saved to: {output_dir}")
 
 
 def load_canvas_data(
@@ -97,8 +172,11 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Create individual plots for all canvases
+  # Create individual plots for all canvases (single model)
   python -m src.visualization.main --output plots/
+
+  # Create multi-model forecast plots for all canvases
+  python -m src.visualization.main --multi-model --output plots/
 
   # Create overview plot for first 9 canvases
   python -m src.visualization.main --overview --max-canvases 9
@@ -161,6 +239,10 @@ Examples:
 
     parser.add_argument(
         "--overview", action="store_true", help="Create multi-canvas overview plot"
+    )
+
+    parser.add_argument(
+        "--multi-model", action="store_true", help="Use multi-model forecasting (shows all prediction vectors)"
     )
 
     parser.add_argument(
@@ -229,8 +311,21 @@ Examples:
                 save_path=save_path,
                 show_plot=not args.no_display,
             )
+        elif args.output and args.multi_model:
+            # Create multi-model forecast plots for all canvases
+            logging.info("Creating multi-model forecast plots...")
+            name_map = get_canvas_name_mapping(args.data_dir)
+            create_multi_model_forecast_plots(
+                canvas_data=canvas_data,
+                output_dir=args.output,
+                metric_col=args.metric,
+                quiet_threshold=args.quiet_threshold,
+                horizon_days=args.horizon_days,
+                name_map=name_map,
+                show_plot=not args.no_display,
+            )
         elif args.output:
-            # Create individual plots for all canvases
+            # Create individual plots for all canvases (single model)
             logging.info(
                 "Creating individual plots for %d canvases...", len(canvas_data)
             )
@@ -249,18 +344,38 @@ Examples:
             metrics = canvas_data[canvas_id]
             logging.info("Creating plot for %s", canvas_id)
 
-            quiet_date = plot_canvas_forecast(
-                metrics=metrics,
-                metric_col=args.metric,
-                quiet_threshold=args.quiet_threshold,
-                horizon_days=args.horizon_days,
-                show_plot=not args.no_display,
-            )
+            if args.multi_model:
+                # Use multi-model forecasting
+                multi_result = plot_canvas_forecast_all_models(
+                    metrics=metrics,
+                    metric_col=args.metric,
+                    quiet_threshold=args.quiet_threshold,
+                    horizon_days=args.horizon_days,
+                    show_plot=not args.no_display,
+                )
 
-            if quiet_date:
-                logging.info("Predicted quiet date: %s", quiet_date)
+                if multi_result and multi_result.best_forecast:
+                    quiet_date = multi_result.best_forecast.quiet_date
+                    if quiet_date:
+                        logging.info("Predicted quiet date: %s", quiet_date)
+                    else:
+                        logging.info("No quiet date predicted")
+                else:
+                    logging.info("No successful forecasts")
             else:
-                logging.info("No quiet date predicted")
+                # Use single model forecasting
+                quiet_date = plot_canvas_forecast(
+                    metrics=metrics,
+                    metric_col=args.metric,
+                    quiet_threshold=args.quiet_threshold,
+                    horizon_days=args.horizon_days,
+                    show_plot=not args.no_display,
+                )
+
+                if quiet_date:
+                    logging.info("Predicted quiet date: %s", quiet_date)
+                else:
+                    logging.info("No quiet date predicted")
 
         logging.info("Visualization completed successfully!")
 

@@ -62,4 +62,4 @@ visualization:
 	pyenv exec python -m src.visualization.main --overview
 
 visualization-save:
-	pyenv exec python -m src.visualization.main --output plots/ --no-display
+	pyenv exec python -m src.visualization.main --multi-model --output plots/ --no-display

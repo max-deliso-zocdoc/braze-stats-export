@@ -10,7 +10,7 @@ import numpy as np
 
 from src.forecasting.linear_decay import (CanvasMetrics, ForecastResult,
                                           QuietDatePredictor,
-                                          StepBasedForecaster)
+                                          StepBasedForecaster, MultiForecastResult)
 
 
 class TestCanvasMetrics(unittest.TestCase):
@@ -413,6 +413,7 @@ class TestForecastResult(unittest.TestCase):
             current_trend="declining",
             model_params={"slope": -2.5, "intercept": 50.0},
             metric_used="total_sent",
+            model_type="linear",
         )
 
         self.assertEqual(result.canvas_id, "test-canvas")
@@ -424,6 +425,7 @@ class TestForecastResult(unittest.TestCase):
         self.assertEqual(result.current_trend, "declining")
         self.assertEqual(result.model_params, {"slope": -2.5, "intercept": 50.0})
         self.assertEqual(result.metric_used, "total_sent")
+        self.assertEqual(result.model_type, "linear")
 
     def test_forecast_result_none_values(self):
         """Test ForecastResult with None values."""
@@ -437,6 +439,7 @@ class TestForecastResult(unittest.TestCase):
             current_trend="insufficient_data",
             model_params={},
             metric_used="none",
+            model_type="none",
         )
 
         self.assertEqual(result.canvas_id, "test-canvas")
@@ -448,6 +451,256 @@ class TestForecastResult(unittest.TestCase):
         self.assertEqual(result.current_trend, "insufficient_data")
         self.assertEqual(result.model_params, {})
         self.assertEqual(result.metric_used, "none")
+        self.assertEqual(result.model_type, "none")
+
+
+class TestMultiModelForecasting(unittest.TestCase):
+    """Test the multi-model forecasting functionality."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.forecaster = StepBasedForecaster(quiet_threshold=5, min_data_points=7)
+        self.temp_dir = tempfile.mkdtemp()
+        self.data_dir = Path(self.temp_dir)
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.temp_dir)
+
+    def _create_test_data(self, canvas_id: str, data_points: list) -> None:
+        """Create test data in the expected step-based directory structure."""
+        canvas_dir = self.data_dir / canvas_id
+        canvas_dir.mkdir(exist_ok=True)
+
+        # Create a step directory
+        step_dir = canvas_dir / "step1"
+        step_dir.mkdir(exist_ok=True)
+
+        # Create channel file
+        channel_file = step_dir / "email.jsonl"
+        with channel_file.open("w") as f:
+            for point in data_points:
+                # Convert test data to the expected format
+                record = {
+                    "date": point["date"],
+                    "sent": point.get("sends", 0),
+                    "delivered": point.get("delivered", 0),
+                    "opens": point.get("opens", 0),
+                    "clicks": point.get("conversions", 0),
+                    "unique_opens": point.get("opens", 0),
+                    "unique_clicks": point.get("conversions", 0),
+                    "bounces": 0,
+                    "unsubscribes": 0,
+                }
+                f.write(json.dumps(record) + "\n")
+
+    def test_predict_quiet_date_all_models_insufficient_data(self):
+        """Test multi-model prediction with insufficient data points."""
+        canvas_id = "insufficient-data"
+        test_data = [
+            {"date": "2023-12-01", "sends": 100},
+            {"date": "2023-12-02", "sends": 90},
+        ]
+
+        self._create_test_data(canvas_id, test_data)
+
+        result = self.forecaster.predict_quiet_date_all_models(canvas_id, self.data_dir)
+
+        self.assertEqual(result.canvas_id, canvas_id)
+        self.assertEqual(len(result.forecasts), 0)
+        self.assertIsNone(result.best_forecast)
+        self.assertEqual(result.total_models_tried, 0)
+        self.assertEqual(result.successful_models, 0)
+
+    def test_predict_quiet_date_all_models_declining_trend(self):
+        """Test multi-model prediction with declining trend."""
+        canvas_id = "declining-canvas"
+        base_date = date(2023, 12, 1)
+
+        # Create declining trend data for all metrics
+        test_data = []
+        for i in range(14):  # 14 days of data
+            current_date = base_date + timedelta(days=i)
+            # Decline by 5 per day
+            sends = max(0, 90 - i * 5)
+            delivered = max(0, 80 - i * 5)
+            opens = max(0, 20 - i)
+            conversions = max(0, 7 - i // 2)
+            test_data.append(
+                {
+                    "date": current_date.isoformat(),
+                    "entries": sends + 5,
+                    "sends": sends,
+                    "delivered": delivered,
+                    "opens": opens,
+                    "conversions": conversions,
+                }
+            )
+
+        self._create_test_data(canvas_id, test_data)
+
+        result = self.forecaster.predict_quiet_date_all_models(canvas_id, self.data_dir)
+
+        self.assertEqual(result.canvas_id, canvas_id)
+        self.assertGreater(len(result.forecasts), 0)
+        self.assertIsNotNone(result.best_forecast)
+        self.assertGreater(result.total_models_tried, 0)
+        self.assertGreater(result.successful_models, 0)
+
+        # Check that all forecasts have the required fields
+        for forecast in result.forecasts:
+            self.assertIsInstance(forecast.model_type, str)
+            self.assertIsInstance(forecast.metric_used, str)
+            self.assertIsInstance(forecast.r_squared, float)
+            self.assertIsInstance(forecast.confidence, float)
+            self.assertIsInstance(forecast.current_trend, str)
+
+        # Check that best forecast has highest R-squared
+        if result.best_forecast:
+            best_r_squared = result.best_forecast.r_squared
+            for forecast in result.forecasts:
+                self.assertGreaterEqual(best_r_squared, forecast.r_squared)
+
+    def test_predict_quiet_date_all_models_multiple_metrics(self):
+        """Test that multiple metrics are tried."""
+        canvas_id = "multi-metric-canvas"
+        base_date = date(2023, 12, 1)
+
+        # Create data with different patterns for different metrics
+        test_data = []
+        for i in range(10):  # 10 days of data
+            current_date = base_date + timedelta(days=i)
+            # Different patterns for different metrics
+            sends = max(0, 100 - i * 8)  # Steep decline
+            delivered = max(0, 90 - i * 6)  # Moderate decline
+            opens = max(0, 30 - i * 2)  # Gentle decline
+            conversions = max(0, 10 - i)  # Very gentle decline
+            test_data.append(
+                {
+                    "date": current_date.isoformat(),
+                    "entries": sends + 5,
+                    "sends": sends,
+                    "delivered": delivered,
+                    "opens": opens,
+                    "conversions": conversions,
+                }
+            )
+
+        self._create_test_data(canvas_id, test_data)
+
+        result = self.forecaster.predict_quiet_date_all_models(canvas_id, self.data_dir)
+
+        # Should have multiple forecasts from different metrics
+        self.assertGreater(len(result.forecasts), 1)
+
+        # Check that different metrics are represented
+        metrics_used = set(forecast.metric_used for forecast in result.forecasts)
+        self.assertGreater(len(metrics_used), 1)
+
+    def test_predict_quiet_date_all_models_backward_compatibility(self):
+        """Test that the original predict_quiet_date still works."""
+        canvas_id = "compatibility-canvas"
+        base_date = date(2023, 12, 1)
+
+        # Create declining trend data
+        test_data = []
+        for i in range(10):  # 10 days of data
+            current_date = base_date + timedelta(days=i)
+            sends = max(0, 80 - i * 6)
+            test_data.append(
+                {
+                    "date": current_date.isoformat(),
+                    "entries": sends + 5,
+                    "sends": sends,
+                    "delivered": sends - 2,
+                    "opens": int(sends * 0.1),
+                    "conversions": int(sends * 0.02),
+                }
+            )
+
+        self._create_test_data(canvas_id, test_data)
+
+        # Test original method
+        original_result = self.forecaster.predict_quiet_date(canvas_id, self.data_dir)
+
+        # Test new method
+        multi_result = self.forecaster.predict_quiet_date_all_models(canvas_id, self.data_dir)
+
+        # The best forecast from multi-result should match the original result
+        if multi_result.best_forecast:
+            self.assertEqual(original_result.quiet_date, multi_result.best_forecast.quiet_date)
+            self.assertEqual(original_result.confidence, multi_result.best_forecast.confidence)
+            self.assertEqual(original_result.r_squared, multi_result.best_forecast.r_squared)
+            self.assertEqual(original_result.current_trend, multi_result.best_forecast.current_trend)
+            self.assertEqual(original_result.metric_used, multi_result.best_forecast.metric_used)
+            self.assertEqual(original_result.model_type, multi_result.best_forecast.model_type)
+
+
+class TestMultiForecastResult(unittest.TestCase):
+    """Test the MultiForecastResult class."""
+
+    def test_multi_forecast_result_creation(self):
+        """Test creating MultiForecastResult instances."""
+        forecasts = [
+            ForecastResult(
+                canvas_id="test-canvas",
+                canvas_name="Test Canvas",
+                quiet_date=date(2024, 1, 15),
+                confidence=0.85,
+                r_squared=0.75,
+                days_to_quiet=30,
+                current_trend="declining",
+                model_params={"slope": -2.5, "intercept": 100},
+                metric_used="total_sent",
+                model_type="linear",
+            ),
+            ForecastResult(
+                canvas_id="test-canvas",
+                canvas_name="Test Canvas",
+                quiet_date=date(2024, 1, 20),
+                confidence=0.80,
+                r_squared=0.70,
+                days_to_quiet=35,
+                current_trend="declining",
+                model_params={"a": 100, "b": 0.1, "c": 0},
+                metric_used="total_opens",
+                model_type="exponential",
+            ),
+        ]
+
+        result = MultiForecastResult(
+            canvas_id="test-canvas",
+            canvas_name="Test Canvas",
+            forecasts=forecasts,
+            best_forecast=forecasts[0],  # First one has higher R-squared
+            total_models_tried=4,
+            successful_models=2,
+        )
+
+        self.assertEqual(result.canvas_id, "test-canvas")
+        self.assertEqual(result.canvas_name, "Test Canvas")
+        self.assertEqual(len(result.forecasts), 2)
+        self.assertEqual(result.best_forecast, forecasts[0])
+        self.assertEqual(result.total_models_tried, 4)
+        self.assertEqual(result.successful_models, 2)
+
+    def test_multi_forecast_result_empty(self):
+        """Test creating MultiForecastResult with no forecasts."""
+        result = MultiForecastResult(
+            canvas_id="empty-canvas",
+            canvas_name="Empty Canvas",
+            forecasts=[],
+            best_forecast=None,
+            total_models_tried=0,
+            successful_models=0,
+        )
+
+        self.assertEqual(result.canvas_id, "empty-canvas")
+        self.assertEqual(len(result.forecasts), 0)
+        self.assertIsNone(result.best_forecast)
+        self.assertEqual(result.total_models_tried, 0)
+        self.assertEqual(result.successful_models, 0)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from ..forecasting.linear_decay import CanvasMetrics, StepBasedForecaster, ForecastResult
+from ..forecasting.linear_decay import CanvasMetrics, StepBasedForecaster, ForecastResult, MultiForecastResult
 
 
 def validate_canvas_data(
@@ -83,16 +83,16 @@ def canvas_metrics_to_dataframe(metrics: List[CanvasMetrics]) -> pd.DataFrame:
     return df
 
 
-def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5) -> Optional[ForecastResult]:
+def _get_all_forecast_results(metrics: List[CanvasMetrics], quiet_threshold: int = 5) -> Optional[MultiForecastResult]:
     """
-    Use the existing forecasting logic to get forecast results.
+    Use the existing forecasting logic to get all forecast results.
 
     Args:
         metrics: List of CanvasMetrics objects
         quiet_threshold: Daily sends below this are considered "quiet"
 
     Returns:
-        ForecastResult if successful, None otherwise
+        MultiForecastResult if successful, None otherwise
     """
     if not metrics or len(metrics) < 7:  # Minimum data points for forecasting
         return None
@@ -111,8 +111,9 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
         ("total_delivered", [m.total_delivered for m in metrics]),
     ]
 
-    best_result: Optional[ForecastResult] = None
-    best_r_squared = -1
+    all_forecasts: List[ForecastResult] = []
+    total_models_tried = 0
+    successful_models = 0
 
     for metric_name, y_values in metrics_to_try:
         # Skip if no variation in the data
@@ -132,6 +133,7 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
         models = []
 
         # 1. Linear regression
+        total_models_tried += 1
         try:
             from scipy import stats
             slope, intercept, r_value, p_value, std_err = stats.linregress(
@@ -147,11 +149,13 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
                     "function": lambda x: slope * x + intercept,
                 }
             )
+            successful_models += 1
         except Exception:
             continue
 
         # 2. Exponential decay (if we have enough non-zero data)
         if np.sum(non_zero_mask) >= 7:
+            total_models_tried += 1
             try:
                 x_nonzero = x_values[non_zero_mask]
                 y_nonzero = y_values_array[non_zero_mask]
@@ -175,18 +179,12 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
                         ),
                     }
                 )
+                successful_models += 1
             except Exception:
                 continue
 
-        if not models:
-            continue
-
-        # Choose the best model for this metric
-        best_model = max(models, key=lambda m: m["r_squared"])
-
-        if best_model["r_squared"] > best_r_squared:
-            best_r_squared = best_model["r_squared"]
-
+        # Process all successful models for this metric
+        for model in models:
             # Determine current trend
             recent_values = y_values_array[
                 -min(7, len(y_values_array)) :
@@ -205,7 +203,7 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
             # Predict quiet date
             quiet_date: Optional[date] = None
             days_to_quiet: Optional[int] = None
-            confidence = best_model["r_squared"]
+            confidence = model["r_squared"]
 
             # Reduce confidence for growing trends since they don't make sense for quiet date prediction
             if trend == "growing":
@@ -213,10 +211,10 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
             elif trend == "stable":
                 confidence *= 0.7  # Reduce confidence for stable trends as well
 
-            if best_model["type"] == "linear":
+            if model["type"] == "linear":
                 # For linear model: solve slope * x + intercept = quiet_threshold
-                slope = best_model["params"]["slope"]
-                intercept = best_model["params"]["intercept"]
+                slope = model["params"]["slope"]
+                intercept = model["params"]["intercept"]
 
                 if slope < 0:  # Declining trend
                     days_to_threshold = (quiet_threshold - intercept) / slope
@@ -226,12 +224,12 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
                         )
                         days_to_quiet = int(days_to_threshold) - len(metrics)
 
-            elif best_model["type"] == "exponential":
+            elif model["type"] == "exponential":
                 # For exponential model: solve a * exp(-bx) + c = quiet_threshold
                 a, b, c = (
-                    best_model["params"]["a"],
-                    best_model["params"]["b"],
-                    best_model["params"]["c"],
+                    model["params"]["a"],
+                    model["params"]["b"],
+                    model["params"]["c"],
                 )
 
                 if (
@@ -253,19 +251,50 @@ def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5)
                     except (ValueError, ZeroDivisionError):
                         pass
 
-            best_result = ForecastResult(
+            forecast_result = ForecastResult(
                 canvas_id=metrics[0].canvas_id,
                 canvas_name="",
                 quiet_date=quiet_date,
                 confidence=min(confidence, 1.0),
-                r_squared=best_model["r_squared"],
+                r_squared=model["r_squared"],
                 days_to_quiet=days_to_quiet,
                 current_trend=trend,
-                model_params=best_model["params"],
+                model_params=model["params"],
                 metric_used=metric_name,
+                model_type=model["type"],
             )
 
-    return best_result
+            all_forecasts.append(forecast_result)
+
+    # Find the best forecast based on R-squared
+    best_forecast = None
+    if all_forecasts:
+        best_forecast = max(all_forecasts, key=lambda f: f.r_squared)
+
+    return MultiForecastResult(
+        canvas_id=metrics[0].canvas_id,
+        canvas_name="",
+        forecasts=all_forecasts,
+        best_forecast=best_forecast,
+        total_models_tried=total_models_tried,
+        successful_models=successful_models,
+    )
+
+
+def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5) -> Optional[ForecastResult]:
+    """
+    Use the existing forecasting logic to get forecast results.
+    This function returns only the best prediction for backward compatibility.
+
+    Args:
+        metrics: List of CanvasMetrics objects
+        quiet_threshold: Daily sends below this are considered "quiet"
+
+    Returns:
+        ForecastResult if successful, None otherwise
+    """
+    multi_result = _get_all_forecast_results(metrics, quiet_threshold)
+    return multi_result.best_forecast if multi_result else None
 
 
 def _generate_predictions(
@@ -397,11 +426,11 @@ def plot_canvas_forecast(
 
     try:
         # Use the sophisticated forecasting logic
-        forecast_result = _get_forecast_result(metrics, quiet_threshold)
+        forecast_result = _get_all_forecast_results(metrics, quiet_threshold)
 
-        if forecast_result and forecast_result.r_squared > 0:
+        if forecast_result and forecast_result.best_forecast:
             # Generate predictions
-            pred_band, future_dates = _generate_predictions(forecast_result, df, horizon_days)
+            pred_band, future_dates = _generate_predictions(forecast_result.best_forecast, df, horizon_days)
 
             # Regression mean line
             plt.plot(future_dates, pred_band["mean"], lw=2, label="forecast", color="red")
@@ -416,24 +445,24 @@ def plot_canvas_forecast(
                 color="red",
             )
 
-            if forecast_result.quiet_date is not None:
+            if forecast_result.best_forecast.quiet_date is not None:
                 plt.axvline(
-                    forecast_result.quiet_date,
+                    forecast_result.best_forecast.quiet_date,
                     ls=":",
                     color="green",
-                    label=f"predicted quiet: {forecast_result.quiet_date}",
+                    label=f"predicted quiet: {forecast_result.best_forecast.quiet_date}",
                 )
 
             # Add model statistics
-            r_squared = forecast_result.r_squared
-            model_type = "linear" if "slope" in forecast_result.model_params else "exponential"
-            trend = forecast_result.current_trend
+            r_squared = forecast_result.best_forecast.r_squared
+            model_type = forecast_result.best_forecast.model_type
+            trend = forecast_result.best_forecast.current_trend
 
             plt.title(
                 f"{metric_col}: Canvas Forecast ({model_type}, R²={r_squared:.3f}, trend={trend})"
             )
 
-            quiet_date = forecast_result.quiet_date
+            quiet_date = forecast_result.best_forecast.quiet_date
         else:
             plt.title(f"{metric_col}: Canvas Data (Insufficient data for forecasting)")
             quiet_date = None
@@ -546,11 +575,11 @@ def plot_multiple_canvases(
 
         # Use sophisticated forecasting
         try:
-            forecast_result = _get_forecast_result(metrics, quiet_threshold)
+            forecast_result = _get_all_forecast_results(metrics, quiet_threshold)
 
-            if forecast_result and forecast_result.r_squared > 0:
-                pred_band, future_dates = _generate_predictions(forecast_result, df)
-                quiet_date = forecast_result.quiet_date
+            if forecast_result and forecast_result.best_forecast:
+                pred_band, future_dates = _generate_predictions(forecast_result.best_forecast, df)
+                quiet_date = forecast_result.best_forecast.quiet_date
 
                 # Plot
                 ax.scatter(df["date"], df[metric_col], s=15, alpha=0.7, color="blue")
@@ -568,9 +597,9 @@ def plot_multiple_canvases(
                     ax.axvline(quiet_date, ls=":", color="green", alpha=0.7)
 
                 # Add statistics
-                r_squared = forecast_result.r_squared
-                model_type = "linear" if "slope" in forecast_result.model_params else "exponential"
-                trend = forecast_result.current_trend
+                r_squared = forecast_result.best_forecast.r_squared
+                model_type = forecast_result.best_forecast.model_type
+                trend = forecast_result.best_forecast.current_trend
                 ax.set_title(f"{canvas_id[:20]}...\n{model_type}, R²={r_squared:.2f}, {trend}")
 
             else:
@@ -656,3 +685,181 @@ def create_forecast_report_plots(
             print(f"Error creating plot for {canvas_id}: {e}")
 
     print(f"Forecast plots saved to {output_dir}")
+
+
+def plot_canvas_forecast_all_models(
+    metrics: List[CanvasMetrics],
+    metric_col: str = "total_sent",
+    quiet_threshold: int = 5,
+    horizon_days: int = 180,
+    figsize: Tuple[int, int] = (14, 10),
+    save_path: Optional[Path] = None,
+    show_plot: bool = True,
+) -> Optional[MultiForecastResult]:
+    """
+    Create a comprehensive plot showing ALL Canvas data sources and ALL forecast predictions.
+
+    Args:
+        metrics: List of CanvasMetrics objects
+        metric_col: Column name to analyze (default: "total_sent")
+        quiet_threshold: Daily sends below this are considered "quiet"
+        horizon_days: Number of days to predict into the future
+        figsize: Figure size (width, height)
+        save_path: Optional path to save the plot
+        show_plot: Whether to display the plot
+
+    Returns:
+        MultiForecastResult with all predictions (if any) or None
+    """
+    if not metrics:
+        print("No metrics data provided")
+        return None
+
+    # Convert to DataFrame
+    df = canvas_metrics_to_dataframe(metrics)
+    if df.empty:
+        print("No valid data to plot")
+        return None
+
+    # Create plot
+    plt.figure(figsize=figsize)
+
+    # Define colors for different metrics
+    metric_colors = {
+        'total_sent': 'blue',
+        'total_opens': 'green',
+        'total_clicks': 'red',
+        'total_delivered': 'purple',
+        'total_unique_opens': 'orange',
+        'total_unique_clicks': 'brown',
+        'total_bounces': 'pink',
+        'total_unsubscribes': 'gray',
+        'active_steps': 'olive',
+        'active_channels': 'cyan'
+    }
+
+    # Define the metrics we want to show (both data and predictions)
+    metrics_to_show = ['total_sent', 'total_opens', 'total_clicks', 'total_delivered']
+
+    # Plot historical data for all metrics
+    for metric in metrics_to_show:
+        if metric in df.columns:
+            color = metric_colors.get(metric, 'black')
+            plt.scatter(
+                df["date"],
+                df[metric],
+                s=20,
+                alpha=0.6,
+                label=f"historical {metric}",
+                color=color,
+                marker='o'
+            )
+
+    try:
+        # Use the sophisticated forecasting logic to get all predictions
+        multi_forecast_result = _get_all_forecast_results(metrics, quiet_threshold)
+
+        if multi_forecast_result and multi_forecast_result.forecasts:
+            # Plot each forecast with colors matching their data source
+            linestyles = ['-', '--', '-.', ':']
+
+            # Group forecasts by metric to assign consistent colors
+            forecasts_by_metric: dict[str, list[ForecastResult]] = {}
+            for forecast in multi_forecast_result.forecasts:
+                if forecast.metric_used not in forecasts_by_metric:
+                    forecasts_by_metric[forecast.metric_used] = []
+                forecasts_by_metric[forecast.metric_used].append(forecast)
+
+            for metric, forecasts in forecasts_by_metric.items():
+                base_color = metric_colors.get(metric, 'black')
+
+                for i, forecast in enumerate(forecasts):
+                    if forecast.r_squared > 0:
+                        # Generate predictions for this model
+                        pred_band, future_dates = _generate_predictions(forecast, df, horizon_days)
+
+                        # Use the same color as the data source, but different line style
+                        linestyle = linestyles[i % len(linestyles)]
+
+                        # Make the prediction line slightly darker than the data points
+                        import matplotlib.colors as mcolors
+                        pred_color = mcolors.to_rgb(base_color)
+                        pred_color = tuple(max(0, min(1, c * 0.8)) for c in pred_color)  # Darken by 20%
+
+                        # Plot the forecast line
+                        plt.plot(
+                            future_dates,
+                            pred_band["mean"],
+                            lw=2,
+                            linestyle=linestyle,
+                            color=pred_color,
+                            label=f"{forecast.model_type} ({forecast.metric_used}, R²={forecast.r_squared:.2f})"
+                        )
+
+                        # Plot confidence band with transparency
+                        plt.fill_between(
+                            future_dates,
+                            pred_band["mean_ci_lower"],
+                            pred_band["mean_ci_upper"],
+                            alpha=0.1,
+                            color=pred_color,
+                        )
+
+                        # Plot quiet date prediction if available
+                        if forecast.quiet_date is not None:
+                            plt.axvline(
+                                forecast.quiet_date,
+                                ls=":",
+                                color=pred_color,
+                                alpha=0.8,
+                                linewidth=2,
+                                label=f"quiet: {forecast.quiet_date} ({forecast.model_type}, {forecast.metric_used})"
+                            )
+
+            # Add summary statistics
+            best_forecast = multi_forecast_result.best_forecast
+            if best_forecast:
+                plt.title(
+                    f"Canvas Forecast - {len(multi_forecast_result.forecasts)} models "
+                    f"(Best: {best_forecast.model_type} on {best_forecast.metric_used}, "
+                    f"R²={best_forecast.r_squared:.3f}, trend={best_forecast.current_trend})"
+                )
+            else:
+                plt.title(f"Canvas Forecast - {len(multi_forecast_result.forecasts)} models")
+
+            # Add legend with better organization
+            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8, ncol=1)
+
+        else:
+            plt.title("Canvas Data (Insufficient data for forecasting)")
+
+    except Exception as e:
+        # Handle errors gracefully
+        plt.title(f"Canvas Data (Forecasting Failed: {str(e)[:50]}...)")
+        print(f"Forecasting failed: {e}")
+
+    # Threshold line (always show)
+    plt.axhline(
+        quiet_threshold,
+        ls="--",
+        color="orange",
+        label=f"quiet threshold = {quiet_threshold}",
+        linewidth=2,
+        alpha=0.8
+    )
+
+    plt.ylabel("Metric Values")
+    plt.xlabel("Date")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        print(f"Plot saved to {save_path}")
+
+    if show_plot:
+        plt.show()
+    else:
+        plt.close()
+
+    return multi_forecast_result

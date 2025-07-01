@@ -84,6 +84,18 @@ class ForecastResult(NamedTuple):
     current_trend: str  # 'declining', 'stable', 'growing', 'insufficient_data'
     model_params: Dict[str, float]
     metric_used: str  # Which metric was used for forecasting
+    model_type: str  # 'linear' or 'exponential'
+
+
+class MultiForecastResult(NamedTuple):
+    """Result containing multiple forecast predictions for a canvas."""
+
+    canvas_id: str
+    canvas_name: str
+    forecasts: List[ForecastResult]  # All successful forecasts
+    best_forecast: Optional[ForecastResult]  # The best forecast based on R-squared
+    total_models_tried: int  # Total number of models attempted
+    successful_models: int  # Number of successful models
 
 
 def _read_all_jsonl(canvas_dir: Path) -> pd.DataFrame:
@@ -305,32 +317,29 @@ class StepBasedForecaster:
 
         return np.array([log_a_fitted, b_fitted, c_estimate]), r_squared
 
-    def predict_quiet_date(
+    def predict_quiet_date_all_models(
         self, canvas_id: str, data_dir: Optional[Path] = None
-    ) -> ForecastResult:
+    ) -> MultiForecastResult:
         """
-        Predict the quiet date for a Canvas using aggregated step metrics.
+        Predict the quiet date for a Canvas using all available models and metrics.
 
         Args:
             canvas_id: Canvas ID to analyze
             data_dir: Directory containing step-based data
 
         Returns:
-            ForecastResult with prediction details
+            MultiForecastResult with all successful predictions
         """
         canvas_metrics = self.load_canvas_metrics(canvas_id, data_dir)
 
         if len(canvas_metrics) < self.min_data_points:
-            return ForecastResult(
+            return MultiForecastResult(
                 canvas_id=canvas_id,
                 canvas_name="",
-                quiet_date=None,
-                confidence=0.0,
-                r_squared=0.0,
-                days_to_quiet=None,
-                current_trend="insufficient_data",
-                model_params={},
-                metric_used="none",
+                forecasts=[],
+                best_forecast=None,
+                total_models_tried=0,
+                successful_models=0,
             )
 
         # Try different metrics to find the best one for forecasting
@@ -341,8 +350,9 @@ class StepBasedForecaster:
             ("total_delivered", [m.total_delivered for m in canvas_metrics]),
         ]
 
-        best_result: Optional[ForecastResult] = None
-        best_r_squared = -1
+        all_forecasts: List[ForecastResult] = []
+        total_models_tried = 0
+        successful_models = 0
 
         for metric_name, y_values in metrics_to_try:
             # Skip if no variation in the data
@@ -362,6 +372,7 @@ class StepBasedForecaster:
             models = []
 
             # 1. Linear regression
+            total_models_tried += 1
             try:
                 slope, intercept, r_value, p_value, std_err = stats.linregress(
                     x_values, y_values_array
@@ -376,6 +387,7 @@ class StepBasedForecaster:
                         "function": lambda x: slope * x + intercept,
                     }
                 )
+                successful_models += 1
             except Exception as e:
                 logger.debug(
                     f"Linear regression failed for {canvas_id} {metric_name}: {e}"
@@ -383,6 +395,7 @@ class StepBasedForecaster:
 
             # 2. Exponential decay (if we have enough non-zero data)
             if np.sum(non_zero_mask) >= self.min_data_points:
+                total_models_tried += 1
                 try:
                     x_nonzero = x_values[non_zero_mask]
                     y_nonzero = y_values_array[non_zero_mask]
@@ -406,20 +419,14 @@ class StepBasedForecaster:
                             ),
                         }
                     )
+                    successful_models += 1
                 except Exception as e:
                     logger.debug(
                         f"Exponential regression failed for {canvas_id} {metric_name}: {e}"
                     )
 
-            if not models:
-                continue
-
-            # Choose the best model for this metric
-            best_model = max(models, key=lambda m: m["r_squared"])
-
-            if best_model["r_squared"] > best_r_squared:
-                best_r_squared = best_model["r_squared"]
-
+            # Process all successful models for this metric
+            for model in models:
                 # Determine current trend
                 recent_values = y_values_array[
                     -min(7, len(y_values_array)) :
@@ -438,7 +445,7 @@ class StepBasedForecaster:
                 # Predict quiet date
                 quiet_date: Optional[date] = None
                 days_to_quiet: Optional[int] = None
-                confidence = best_model["r_squared"]
+                confidence = model["r_squared"]
 
                 # Reduce confidence for growing trends since they don't make sense for quiet date prediction
                 if trend == "growing":
@@ -448,10 +455,10 @@ class StepBasedForecaster:
                 elif trend == "stable":
                     confidence *= 0.7  # Reduce confidence for stable trends as well
 
-                if best_model["type"] == "linear":
+                if model["type"] == "linear":
                     # For linear model: solve slope * x + intercept = quiet_threshold
-                    slope = best_model["params"]["slope"]
-                    intercept = best_model["params"]["intercept"]
+                    slope = model["params"]["slope"]
+                    intercept = model["params"]["intercept"]
 
                     if slope < 0:  # Declining trend
                         days_to_threshold = (self.quiet_threshold - intercept) / slope
@@ -461,12 +468,12 @@ class StepBasedForecaster:
                             )
                             days_to_quiet = int(days_to_threshold) - len(canvas_metrics)
 
-                elif best_model["type"] == "exponential":
+                elif model["type"] == "exponential":
                     # For exponential model: solve a * exp(-bx) + c = quiet_threshold
                     a, b, c = (
-                        best_model["params"]["a"],
-                        best_model["params"]["b"],
-                        best_model["params"]["c"],
+                        model["params"]["a"],
+                        model["params"]["b"],
+                        model["params"]["c"],
                     )
 
                     if (
@@ -489,21 +496,53 @@ class StepBasedForecaster:
                         except (ValueError, ZeroDivisionError):
                             pass
 
-                best_result = ForecastResult(
+                forecast_result = ForecastResult(
                     canvas_id=canvas_id,
                     canvas_name="",
                     quiet_date=quiet_date,
                     confidence=min(confidence, 1.0),
-                    r_squared=best_model["r_squared"],
+                    r_squared=model["r_squared"],
                     days_to_quiet=days_to_quiet,
                     current_trend=trend,
-                    model_params=best_model["params"],
+                    model_params=model["params"],
                     metric_used=metric_name,
+                    model_type=model["type"],
                 )
 
-        # Return best result or insufficient data
-        if best_result:
-            return best_result
+                all_forecasts.append(forecast_result)
+
+        # Find the best forecast based on R-squared
+        best_forecast = None
+        if all_forecasts:
+            best_forecast = max(all_forecasts, key=lambda f: f.r_squared)
+
+        return MultiForecastResult(
+            canvas_id=canvas_id,
+            canvas_name="",
+            forecasts=all_forecasts,
+            best_forecast=best_forecast,
+            total_models_tried=total_models_tried,
+            successful_models=successful_models,
+        )
+
+    def predict_quiet_date(
+        self, canvas_id: str, data_dir: Optional[Path] = None
+    ) -> ForecastResult:
+        """
+        Predict the quiet date for a Canvas using aggregated step metrics.
+        This method returns only the best prediction for backward compatibility.
+
+        Args:
+            canvas_id: Canvas ID to analyze
+            data_dir: Directory containing step-based data
+
+        Returns:
+            ForecastResult with prediction details
+        """
+        multi_result = self.predict_quiet_date_all_models(canvas_id, data_dir)
+
+        if multi_result.best_forecast:
+            return multi_result.best_forecast
         else:
             return ForecastResult(
                 canvas_id=canvas_id,
@@ -515,6 +554,7 @@ class StepBasedForecaster:
                 current_trend="insufficient_data",
                 model_params={},
                 metric_used="none",
+                model_type="none",
             )
 
 
@@ -674,6 +714,7 @@ class QuietDatePredictor:
                     current_trend=result.current_trend,
                     model_params=result.model_params,
                     metric_used=result.metric_used,
+                    model_type=result.model_type,
                 )
 
                 results.append(result)
@@ -699,21 +740,113 @@ class QuietDatePredictor:
         logger.info(f"Completed analysis of {len(results)} canvases")
         return results
 
+    def predict_all_canvases_all_models(self) -> List[MultiForecastResult]:
+        """Predict quiet dates for all available canvases using all models."""
+        canvas_dirs = [d for d in self.data_dir.iterdir() if d.is_dir()]
+        results: List[MultiForecastResult] = []
+
+        logger.info(f"Analyzing {len(canvas_dirs)} Canvas directories (all models)...")
+
+        for canvas_dir in canvas_dirs:
+            canvas_id = canvas_dir.name
+
+            # Skip if we have a name filter and this canvas doesn't match
+            if self.canvas_name_filter:
+                canvas_name = self._get_canvas_name_mapping().get(canvas_id, "")
+                if not canvas_name.lower().startswith(self.canvas_name_filter.lower()):
+                    continue
+
+            try:
+                multi_result = self.forecaster.predict_quiet_date_all_models(canvas_id, self.data_dir)
+
+                # Add canvas name to result
+                canvas_name = self._get_canvas_name_mapping().get(canvas_id, canvas_id)
+
+                # Update canvas names in all forecasts
+                updated_forecasts = []
+                for forecast in multi_result.forecasts:
+                    fc = forecast
+                    updated_forecast = ForecastResult(
+                        canvas_id=fc.canvas_id,
+                        canvas_name=canvas_name,
+                        quiet_date=fc.quiet_date,
+                        confidence=fc.confidence,
+                        r_squared=fc.r_squared,
+                        days_to_quiet=fc.days_to_quiet,
+                        current_trend=fc.current_trend,
+                        model_params=fc.model_params,
+                        metric_used=fc.metric_used,
+                        model_type=fc.model_type,
+                    )
+                    updated_forecasts.append(updated_forecast)
+
+                # Update best forecast if it exists
+                updated_best_forecast = None
+                if multi_result.best_forecast:
+                    best_fc = multi_result.best_forecast
+                    updated_best_forecast = ForecastResult(
+                        canvas_id=best_fc.canvas_id,
+                        canvas_name=canvas_name,
+                        quiet_date=best_fc.quiet_date,
+                        confidence=best_fc.confidence,
+                        r_squared=best_fc.r_squared,
+                        days_to_quiet=best_fc.days_to_quiet,
+                        current_trend=best_fc.current_trend,
+                        model_params=best_fc.model_params,
+                        metric_used=best_fc.metric_used,
+                        model_type=best_fc.model_type,
+                    )
+
+                updated_multi_result = MultiForecastResult(
+                    canvas_id=multi_result.canvas_id,
+                    canvas_name=canvas_name,
+                    forecasts=updated_forecasts,
+                    best_forecast=updated_best_forecast,
+                    total_models_tried=multi_result.total_models_tried,
+                    successful_models=multi_result.successful_models,
+                )
+
+                results.append(updated_multi_result)
+
+                if updated_best_forecast and updated_best_forecast.quiet_date:
+                    info_part1 = f"Canvas {canvas_name} ({canvas_id}): "
+                    info_part2 = f"Quiet date {updated_best_forecast.quiet_date} "
+                    info_part3a = f"(confidence: {updated_best_forecast.confidence:.1%}, "
+                    info_part3b = f"trend: {updated_best_forecast.current_trend}, "
+                    info_part3c = f"models: {len(updated_forecasts)}/{updated_multi_result.total_models_tried})"
+                    info_msg = info_part1 + info_part2 + info_part3a + info_part3b + info_part3c
+                    logger.info(info_msg)
+                else:
+                    models_count = len(updated_forecasts)
+                    total_models = updated_multi_result.total_models_tried
+                    part1 = f"Canvas {canvas_name} ({canvas_id}): "
+                    part2 = "No quiet date predicted "
+                    part3 = f"(models: {models_count}/{total_models})"
+                    debug_msg = part1 + part2 + part3
+                    logger.debug(debug_msg)
+
+            except Exception as e:
+                logger.error(f"Error predicting quiet date for Canvas {canvas_id}: {e}")
+                continue
+
+        logger.info(f"Completed analysis of {len(results)} canvases (all models)")  # noqa: E501
+        return results
+
     def generate_forecast_report(self) -> Dict[str, Any]:
         """Generate a comprehensive forecast report."""
-        results = self.predict_all_canvases()
+        results = self.predict_all_canvases_all_models()
 
         # Calculate summary statistics
         total_canvases = len(results)
-        predictable = sum(1 for r in results if r.quiet_date is not None)
+        predictable = sum(1 for r in results if r.best_forecast is not None and r.best_forecast.quiet_date is not None)
         unpredictable = total_canvases - predictable
 
         # Count canvases going quiet soon (≤30 days) vs later
         going_quiet_soon = 0
         going_quiet_later = 0
         for result in results:
-            if result.quiet_date and result.days_to_quiet:
-                if result.days_to_quiet <= 30:
+            if result.best_forecast and result.best_forecast.quiet_date and result.best_forecast.days_to_quiet:
+                if result.best_forecast.days_to_quiet <= 30:
                     going_quiet_soon += 1
                 else:
                     going_quiet_later += 1
@@ -721,49 +854,75 @@ class QuietDatePredictor:
         # Analyze trends
         trend_counts: Dict[str, int] = {}
         for result in results:
-            trend = result.current_trend
-            trend_counts[trend] = trend_counts.get(trend, 0) + 1
+            if result.best_forecast:
+                trend = result.best_forecast.current_trend
+                trend_counts[trend] = trend_counts.get(trend, 0) + 1
+            else:
+                trend_counts["unknown"] = trend_counts.get("unknown", 0) + 1
 
         # Analyze confidence distribution
         confidence_distribution = {"high": 0, "medium": 0, "low": 0}
         for result in results:
-            if result.confidence >= 0.7:
-                confidence_distribution["high"] += 1
-            elif result.confidence >= 0.4:
-                confidence_distribution["medium"] += 1
+            if result.best_forecast:
+                if result.best_forecast.confidence >= 0.7:
+                    confidence_distribution["high"] += 1
+                elif result.best_forecast.confidence >= 0.4:
+                    confidence_distribution["medium"] += 1
+                else:
+                    confidence_distribution["low"] += 1
             else:
                 confidence_distribution["low"] += 1
 
         # Prepare detailed results
         all_canvases = []
         for result in results:
-            canvas_data = {
-                "canvas_id": result.canvas_id,
-                "canvas_name": result.canvas_name,
-                "quiet_date": (
-                    result.quiet_date.isoformat() if result.quiet_date else None
-                ),
-                "days_to_quiet": result.days_to_quiet,
-                "confidence": result.confidence,
-                "r_squared": result.r_squared,
-                "trend": result.current_trend,
-                "metric_used": result.metric_used,
-                "model_params": result.model_params,
-            }
+            best_fc = result.best_forecast
+            if best_fc is not None:
+                canvas_data = {
+                    "canvas_id": result.canvas_id,
+                    "canvas_name": result.canvas_name,
+                    "quiet_date": best_fc.quiet_date.isoformat() if best_fc.quiet_date else None,
+                    "days_to_quiet": best_fc.days_to_quiet,
+                    "confidence": best_fc.confidence,
+                    "r_squared": best_fc.r_squared,
+                    "trend": best_fc.current_trend,
+                    "metric_used": best_fc.metric_used,
+                    "model_params": best_fc.model_params,
+                    "model_type": best_fc.model_type,
+                    "total_models_tried": result.total_models_tried,
+                    "successful_models": result.successful_models,
+                }
+            else:
+                canvas_data = {
+                    "canvas_id": result.canvas_id,
+                    "canvas_name": result.canvas_name,
+                    "quiet_date": None,
+                    "days_to_quiet": None,
+                    "confidence": 0.0,
+                    "r_squared": 0.0,
+                    "trend": "unknown",
+                    "metric_used": "unknown",
+                    "model_params": {},
+                    "model_type": "unknown",
+                    "total_models_tried": result.total_models_tried,
+                    "successful_models": result.successful_models,
+                }
             all_canvases.append(canvas_data)
 
         # Calculate averages for predictable canvases
         predictable_results = []
         for r in results:
-            if r.quiet_date is not None and r.days_to_quiet is not None:
+            if r.best_forecast is not None:
                 predictable_results.append(r)
 
         if predictable_results:
             total_days: float = 0.0
             total_confidence: float = 0.0
             for r in predictable_results:
-                total_days += float(r.days_to_quiet)  # type: ignore
-                total_confidence += r.confidence
+                best_fc = r.best_forecast
+                if best_fc is not None and best_fc.days_to_quiet is not None:
+                    total_days += float(best_fc.days_to_quiet)
+                    total_confidence += best_fc.confidence
             avg_days_to_quiet = total_days / len(predictable_results)
             avg_confidence = total_confidence / len(predictable_results)
         else:
