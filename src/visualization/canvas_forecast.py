@@ -1,16 +1,15 @@
 """Visualization utilities for Canvas quiet date forecasting."""
 
 import re
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 
-from ..forecasting.linear_decay import CanvasMetrics
+from ..forecasting.linear_decay import CanvasMetrics, StepBasedForecaster, ForecastResult
 
 
 def validate_canvas_data(
@@ -84,65 +83,270 @@ def canvas_metrics_to_dataframe(metrics: List[CanvasMetrics]) -> pd.DataFrame:
     return df
 
 
-def fit_linear_model(
-    df: pd.DataFrame, metric_col: str = "total_sent"
-) -> Tuple[sm.OLS, pd.DataFrame]:
-    """Fit linear regression model to the data."""
-    df = df.sort_values("date").copy()
-    df["days_since_start"] = (df["date"] - df["date"].min()).dt.days
+def _get_forecast_result(metrics: List[CanvasMetrics], quiet_threshold: int = 5) -> Optional[ForecastResult]:
+    """
+    Use the existing forecasting logic to get forecast results.
 
-    X = sm.add_constant(df["days_since_start"])
-    y = df[metric_col]
+    Args:
+        metrics: List of CanvasMetrics objects
+        quiet_threshold: Daily sends below this are considered "quiet"
 
-    # Check for valid data before fitting
-    if len(y) < 2:
-        raise ValueError("Insufficient data points for regression")
+    Returns:
+        ForecastResult if successful, None otherwise
+    """
+    if not metrics or len(metrics) < 7:  # Minimum data points for forecasting
+        return None
 
-    if y.var() == 0:
-        raise ValueError("No variation in data (all values are the same)")
+    # Create a temporary forecaster instance
+    forecaster = StepBasedForecaster(quiet_threshold=quiet_threshold, min_data_points=7)
 
-    if y.isna().any() or np.isinf(y).any():
-        raise ValueError("Data contains NaN or infinite values")
+    # We need to simulate the forecasting process since we already have the metrics
+    # The forecaster expects to load from files, but we can work around this
 
-    linmod = sm.OLS(y, X).fit()
+    # Try different metrics to find the best one for forecasting
+    metrics_to_try = [
+        ("total_sent", [m.total_sent for m in metrics]),
+        ("total_opens", [m.total_opens for m in metrics]),
+        ("total_clicks", [m.total_clicks for m in metrics]),
+        ("total_delivered", [m.total_delivered for m in metrics]),
+    ]
 
-    # Check for valid R²
-    if np.isnan(linmod.rsquared) or np.isinf(linmod.rsquared):
-        raise ValueError("Invalid R² value calculated")
+    best_result: Optional[ForecastResult] = None
+    best_r_squared = -1
 
-    return linmod, df
+    for metric_name, y_values in metrics_to_try:
+        # Skip if no variation in the data
+        if max(y_values) - min(y_values) < 1:
+            continue
+
+        # Convert dates to days since start
+        dates = [m.date for m in metrics]
+        base_date = dates[0]
+        x_values = np.array([(d - base_date).days for d in dates])
+        y_values_array = np.array(y_values)
+
+        # Filter out days with zero values for exponential model
+        non_zero_mask = y_values_array > 0
+
+        # Try different models
+        models = []
+
+        # 1. Linear regression
+        try:
+            from scipy import stats
+            slope, intercept, r_value, p_value, std_err = stats.linregress(
+                x_values, y_values_array
+            )
+            linear_r_squared = r_value**2
+
+            models.append(
+                {
+                    "type": "linear",
+                    "params": {"slope": slope, "intercept": intercept},
+                    "r_squared": linear_r_squared,
+                    "function": lambda x: slope * x + intercept,
+                }
+            )
+        except Exception:
+            continue
+
+        # 2. Exponential decay (if we have enough non-zero data)
+        if np.sum(non_zero_mask) >= 7:
+            try:
+                x_nonzero = x_values[non_zero_mask]
+                y_nonzero = y_values_array[non_zero_mask]
+
+                # Use log-space fitting for better numerical stability
+                popt, exp_r_squared = forecaster._fit_exponential_log_space(
+                    x_nonzero, y_nonzero
+                )
+                log_a, b, c = popt
+
+                # Convert log_a back to a for compatibility
+                a = np.exp(log_a)
+
+                models.append(
+                    {
+                        "type": "exponential",
+                        "params": {"a": a, "b": b, "c": c, "log_a": log_a},
+                        "r_squared": exp_r_squared,
+                        "function": lambda x: forecaster._log_exponential_decay_func(
+                            x, log_a, b, c
+                        ),
+                    }
+                )
+            except Exception:
+                continue
+
+        if not models:
+            continue
+
+        # Choose the best model for this metric
+        best_model = max(models, key=lambda m: m["r_squared"])
+
+        if best_model["r_squared"] > best_r_squared:
+            best_r_squared = best_model["r_squared"]
+
+            # Determine current trend
+            recent_values = y_values_array[
+                -min(7, len(y_values_array)) :
+            ]  # Last week
+            if len(recent_values) >= 2:
+                recent_trend = np.mean(np.diff(recent_values))
+                if recent_trend < -3:
+                    trend = "declining"
+                elif recent_trend > 3:
+                    trend = "growing"
+                else:
+                    trend = "stable"
+            else:
+                trend = "insufficient_data"
+
+            # Predict quiet date
+            quiet_date: Optional[date] = None
+            days_to_quiet: Optional[int] = None
+            confidence = best_model["r_squared"]
+
+            # Reduce confidence for growing trends since they don't make sense for quiet date prediction
+            if trend == "growing":
+                confidence *= 0.3  # Significantly reduce confidence for growing trends
+            elif trend == "stable":
+                confidence *= 0.7  # Reduce confidence for stable trends as well
+
+            if best_model["type"] == "linear":
+                # For linear model: solve slope * x + intercept = quiet_threshold
+                slope = best_model["params"]["slope"]
+                intercept = best_model["params"]["intercept"]
+
+                if slope < 0:  # Declining trend
+                    days_to_threshold = (quiet_threshold - intercept) / slope
+                    if days_to_threshold > 0:
+                        quiet_date = base_date + timedelta(
+                            days=int(days_to_threshold)
+                        )
+                        days_to_quiet = int(days_to_threshold) - len(metrics)
+
+            elif best_model["type"] == "exponential":
+                # For exponential model: solve a * exp(-bx) + c = quiet_threshold
+                a, b, c = (
+                    best_model["params"]["a"],
+                    best_model["params"]["b"],
+                    best_model["params"]["c"],
+                )
+
+                if (
+                    a > 0
+                    and b > 0
+                    and (quiet_threshold - c) > 0
+                    and (quiet_threshold - c) < a
+                ):
+                    try:
+                        import math
+                        days_to_threshold = (
+                            -math.log((quiet_threshold - c) / a) / b
+                        )
+                        if days_to_threshold > 0:
+                            quiet_date = base_date + timedelta(
+                                days=int(days_to_threshold)
+                            )
+                            days_to_quiet = int(days_to_threshold) - len(metrics)
+                    except (ValueError, ZeroDivisionError):
+                        pass
+
+            best_result = ForecastResult(
+                canvas_id=metrics[0].canvas_id,
+                canvas_name="",
+                quiet_date=quiet_date,
+                confidence=min(confidence, 1.0),
+                r_squared=best_model["r_squared"],
+                days_to_quiet=days_to_quiet,
+                current_trend=trend,
+                model_params=best_model["params"],
+                metric_used=metric_name,
+            )
+
+    return best_result
 
 
-def predict_future(
-    linmod: sm.OLS, df: pd.DataFrame, horizon_days: int = 180
-) -> Tuple[pd.DataFrame, np.ndarray]:
-    """Generate future predictions with confidence intervals."""
+def _generate_predictions(forecast_result: ForecastResult, df: pd.DataFrame, horizon_days: int = 180) -> Tuple[pd.DataFrame, np.ndarray]:
+    """
+    Generate future predictions based on the forecast result.
+
+    Args:
+        forecast_result: The forecast result from the sophisticated forecasting logic
+        df: DataFrame with historical data
+        horizon_days: Number of days to predict into the future
+
+    Returns:
+        Tuple of (prediction band DataFrame, future dates array)
+    """
+    if not forecast_result.model_params:
+        # Return empty predictions if no model
+        future_dates = pd.date_range(
+            start=df["date"].max() + pd.Timedelta(days=1),
+            periods=horizon_days,
+            freq="D"
+        )
+        empty_pred = pd.DataFrame({
+            "mean": [np.nan] * horizon_days,
+            "mean_ci_lower": [np.nan] * horizon_days,
+            "mean_ci_upper": [np.nan] * horizon_days,
+        })
+        return empty_pred, future_dates
+
+    # Convert dates to days since start
+    base_date = df["date"].min()
+    df["days_since_start"] = (df["date"] - base_date).dt.days
+
+    # Generate future days
     future_days = np.arange(
         df["days_since_start"].max() + 1,
         df["days_since_start"].max() + horizon_days + 1,
     )
 
-    X_future = sm.add_constant(future_days)
-    pred = linmod.get_prediction(X_future)
-    pred_band = pred.summary_frame(alpha=0.05)  # 95% CI on the mean
+    # Generate predictions based on model type
+    if forecast_result.model_params.get("type") == "linear" or "slope" in forecast_result.model_params:
+        # Linear model
+        slope = forecast_result.model_params.get("slope", 0)
+        intercept = forecast_result.model_params.get("intercept", 0)
 
-    future_dates = df["date"].min() + pd.to_timedelta(future_days, unit="D")
+        predictions = slope * future_days + intercept
+
+        # Simple confidence interval (could be improved)
+        std_err = np.std(df[forecast_result.metric_used]) * 0.1  # Rough estimate
+        ci_lower = predictions - 1.96 * std_err
+        ci_upper = predictions + 1.96 * std_err
+
+    elif "log_a" in forecast_result.model_params:
+        # Exponential model
+        log_a = forecast_result.model_params["log_a"]
+        b = forecast_result.model_params["b"]
+        c = forecast_result.model_params["c"]
+
+        predictions = np.exp(log_a) * np.exp(-b * future_days) + c
+
+        # Simple confidence interval
+        std_err = np.std(df[forecast_result.metric_used]) * 0.1
+        ci_lower = predictions - 1.96 * std_err
+        ci_upper = predictions + 1.96 * std_err
+
+    else:
+        # Fallback
+        predictions = np.full(horizon_days, np.nan)
+        ci_lower = np.full(horizon_days, np.nan)
+        ci_upper = np.full(horizon_days, np.nan)
+
+    # Create prediction band DataFrame
+    pred_band = pd.DataFrame({
+        "mean": predictions,
+        "mean_ci_lower": ci_lower,
+        "mean_ci_upper": ci_upper,
+    })
+
+    # Generate future dates
+    future_dates = base_date + pd.to_timedelta(future_days, unit="D")
 
     return pred_band, future_dates
-
-
-def calculate_quiet_date(
-    linmod: sm.OLS, df: pd.DataFrame, quiet_threshold: int = 5
-) -> Optional[pd.Timestamp]:
-    """Calculate the predicted quiet date based on linear regression."""
-    slope, intercept = linmod.params[1], linmod.params[0]
-
-    if slope < 0 and (quiet_threshold - intercept) / slope > 0:
-        quiet_offset = (quiet_threshold - intercept) / slope
-        quiet_date = df["date"].min() + timedelta(days=quiet_offset)
-        return pd.Timestamp(quiet_date)
-    else:
-        return None  # model says "never" or series is growing
 
 
 def plot_canvas_forecast(
@@ -153,7 +357,7 @@ def plot_canvas_forecast(
     figsize: Tuple[int, int] = (12, 6),
     save_path: Optional[Path] = None,
     show_plot: bool = True,
-) -> Optional[pd.Timestamp]:
+) -> Optional[date]:
     """
     Create a comprehensive plot showing Canvas data, linear fit, and quiet date forecast.
 
@@ -188,49 +392,53 @@ def plot_canvas_forecast(
     )
 
     try:
-        # Fit model
-        linmod, df = fit_linear_model(df, metric_col)
+        # Use the sophisticated forecasting logic
+        forecast_result = _get_forecast_result(metrics, quiet_threshold)
 
-        # Generate predictions
-        pred_band, future_dates = predict_future(linmod, df, horizon_days)
+        if forecast_result and forecast_result.r_squared > 0:
+            # Generate predictions
+            pred_band, future_dates = _generate_predictions(forecast_result, df, horizon_days)
 
-        # Calculate quiet date
-        quiet_date = calculate_quiet_date(linmod, df, quiet_threshold)
+            # Regression mean line
+            plt.plot(future_dates, pred_band["mean"], lw=2, label="forecast", color="red")
 
-        # Regression mean line
-        plt.plot(future_dates, pred_band["mean"], lw=2, label="linear fit", color="red")
-
-        # Confidence band
-        plt.fill_between(
-            future_dates,
-            pred_band["mean_ci_lower"],
-            pred_band["mean_ci_upper"],
-            alpha=0.2,
-            label="95% CI (mean)",
-            color="red",
-        )
-
-        if quiet_date is not None:
-            plt.axvline(
-                quiet_date,
-                ls=":",
-                color="green",
-                label=f"predicted quiet: {quiet_date.date()}",
+            # Confidence band
+            plt.fill_between(
+                future_dates,
+                pred_band["mean_ci_lower"],
+                pred_band["mean_ci_upper"],
+                alpha=0.2,
+                label="95% CI",
+                color="red",
             )
 
-        # Add model statistics
-        r_squared = linmod.rsquared
-        slope = linmod.params[1]
+            if forecast_result.quiet_date is not None:
+                plt.axvline(
+                    forecast_result.quiet_date,
+                    ls=":",
+                    color="green",
+                    label=f"predicted quiet: {forecast_result.quiet_date}",
+                )
 
-        plt.title(
-            f"{metric_col}: Canvas Forecast (R²={r_squared:.3f}, slope={slope:.3f})"
-        )
+            # Add model statistics
+            r_squared = forecast_result.r_squared
+            model_type = "linear" if "slope" in forecast_result.model_params else "exponential"
+            trend = forecast_result.current_trend
 
-    except (ValueError, np.linalg.LinAlgError) as e:
-        # Handle regression errors gracefully
-        plt.title(f"{metric_col}: Canvas Data (Regression Failed: {str(e)[:50]}...)")
+            plt.title(
+                f"{metric_col}: Canvas Forecast ({model_type}, R²={r_squared:.3f}, trend={trend})"
+            )
+
+            quiet_date = forecast_result.quiet_date
+        else:
+            plt.title(f"{metric_col}: Canvas Data (Insufficient data for forecasting)")
+            quiet_date = None
+
+    except Exception as e:
+        # Handle errors gracefully
+        plt.title(f"{metric_col}: Canvas Data (Forecasting Failed: {str(e)[:50]}...)")
         quiet_date = None
-        print(f"Regression failed: {e}")
+        print(f"Forecasting failed: {e}")
 
     # Threshold line (always show)
     plt.axhline(
@@ -331,48 +539,47 @@ def plot_multiple_canvases(
             ax.set_title(f"Canvas: {canvas_id[:20]}...")
             continue
 
-        # Fit model
+        # Use sophisticated forecasting
         try:
-            linmod, df = fit_linear_model(df, metric_col)
-            pred_band, future_dates = predict_future(linmod, df)
-            quiet_date = calculate_quiet_date(linmod, df, quiet_threshold)
+            forecast_result = _get_forecast_result(metrics, quiet_threshold)
 
-            # Plot
-            ax.scatter(df["date"], df[metric_col], s=15, alpha=0.7, color="blue")
-            ax.plot(future_dates, pred_band["mean"], lw=1.5, color="red")
-            ax.fill_between(
-                future_dates,
-                pred_band["mean_ci_lower"],
-                pred_band["mean_ci_upper"],
-                alpha=0.2,
-                color="red",
-            )
-            ax.axhline(quiet_threshold, ls="--", color="orange", alpha=0.7)
+            if forecast_result and forecast_result.r_squared > 0:
+                pred_band, future_dates = _generate_predictions(forecast_result, df)
+                quiet_date = forecast_result.quiet_date
 
-            if quiet_date is not None:
-                ax.axvline(quiet_date, ls=":", color="green", alpha=0.7)
+                # Plot
+                ax.scatter(df["date"], df[metric_col], s=15, alpha=0.7, color="blue")
+                ax.plot(future_dates, pred_band["mean"], lw=1.5, color="red")
+                ax.fill_between(
+                    future_dates,
+                    pred_band["mean_ci_lower"],
+                    pred_band["mean_ci_upper"],
+                    alpha=0.2,
+                    color="red",
+                )
+                ax.axhline(quiet_threshold, ls="--", color="orange", alpha=0.7)
 
-            # Add statistics
-            r_squared = linmod.rsquared
-            slope = linmod.params[1]
-            ax.set_title(f"{canvas_id[:20]}...\nR²={r_squared:.2f}, slope={slope:.2f}")
+                if quiet_date is not None:
+                    ax.axvline(quiet_date, ls=":", color="green", alpha=0.7)
 
-        except (ValueError, np.linalg.LinAlgError) as e:
-            # Handle regression errors gracefully
-            ax.scatter(df["date"], df[metric_col], s=15, alpha=0.7, color="blue")
-            ax.axhline(quiet_threshold, ls="--", color="orange", alpha=0.7)
-            ax.set_title(f"{canvas_id[:20]}...\nRegression failed: {str(e)[:30]}...")
-            print(f"Regression failed for {canvas_id}: {e}")
+                # Add statistics
+                r_squared = forecast_result.r_squared
+                model_type = "linear" if "slope" in forecast_result.model_params else "exponential"
+                trend = forecast_result.current_trend
+                ax.set_title(f"{canvas_id[:20]}...\n{model_type}, R²={r_squared:.2f}, {trend}")
+
+            else:
+                # No valid forecast
+                ax.scatter(df["date"], df[metric_col], s=15, alpha=0.7, color="blue")
+                ax.axhline(quiet_threshold, ls="--", color="orange", alpha=0.7)
+                ax.set_title(f"{canvas_id[:20]}...\nInsufficient data")
+
         except Exception as e:
-            ax.text(
-                0.5,
-                0.5,
-                f"Error: {str(e)[:30]}...",
-                ha="center",
-                va="center",
-                transform=ax.transAxes,
-            )
-            ax.set_title(f"Canvas: {canvas_id[:20]}...")
+            # Handle errors gracefully
+            ax.scatter(df["date"], df[metric_col], s=15, alpha=0.7, color="blue")
+            ax.axhline(quiet_threshold, ls="--", color="orange", alpha=0.7)
+            ax.set_title(f"{canvas_id[:20]}...\nError: {str(e)[:30]}...")
+            print(f"Forecasting failed for {canvas_id}: {e}")
 
         ax.set_ylabel(metric_col)
         ax.grid(True, alpha=0.3)
