@@ -5,17 +5,12 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import numpy as np
-import pytest
 
-from src.forecasting.linear_decay import (
-    StepBasedForecaster,
-    QuietDatePredictor,
-    CanvasMetrics,
-    ForecastResult,
-)
+from src.forecasting.linear_decay import (CanvasMetrics, ForecastResult,
+                                          QuietDatePredictor,
+                                          StepBasedForecaster)
 
 
 class TestCanvasMetrics(unittest.TestCase):

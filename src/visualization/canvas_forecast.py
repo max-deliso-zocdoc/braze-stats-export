@@ -1,18 +1,21 @@
 """Visualization utilities for Canvas quiet date forecasting."""
 
+import re
+from datetime import timedelta
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import statsmodels.api as sm
-from datetime import timedelta
-from typing import List, Optional, Tuple
-from pathlib import Path
-import re
 
 from ..forecasting.linear_decay import CanvasMetrics
 
 
-def validate_canvas_data(metrics: List[CanvasMetrics], metric_col: str = "total_sent") -> bool:
+def validate_canvas_data(
+    metrics: List[CanvasMetrics], metric_col: str = "total_sent"
+) -> bool:
     """
     Validate canvas data before attempting regression.
 
@@ -60,26 +63,30 @@ def canvas_metrics_to_dataframe(metrics: List[CanvasMetrics]) -> pd.DataFrame:
 
     data = []
     for metric in metrics:
-        data.append({
-            "date": metric.date,
-            "total_sent": metric.total_sent,
-            "total_opens": metric.total_opens,
-            "total_unique_opens": metric.total_unique_opens,
-            "total_clicks": metric.total_clicks,
-            "total_unique_clicks": metric.total_unique_clicks,
-            "total_delivered": metric.total_delivered,
-            "total_bounces": metric.total_bounces,
-            "total_unsubscribes": metric.total_unsubscribes,
-            "active_steps": metric.active_steps,
-            "active_channels": metric.active_channels,
-        })
+        data.append(
+            {
+                "date": metric.date,
+                "total_sent": metric.total_sent,
+                "total_opens": metric.total_opens,
+                "total_unique_opens": metric.total_unique_opens,
+                "total_clicks": metric.total_clicks,
+                "total_unique_clicks": metric.total_unique_clicks,
+                "total_delivered": metric.total_delivered,
+                "total_bounces": metric.total_bounces,
+                "total_unsubscribes": metric.total_unsubscribes,
+                "active_steps": metric.active_steps,
+                "active_channels": metric.active_channels,
+            }
+        )
 
     df = pd.DataFrame(data)
     df["date"] = pd.to_datetime(df["date"])
     return df
 
 
-def fit_linear_model(df: pd.DataFrame, metric_col: str = "total_sent") -> Tuple[sm.OLS, pd.DataFrame]:
+def fit_linear_model(
+    df: pd.DataFrame, metric_col: str = "total_sent"
+) -> Tuple[sm.OLS, pd.DataFrame]:
     """Fit linear regression model to the data."""
     df = df.sort_values("date").copy()
     df["days_since_start"] = (df["date"] - df["date"].min()).dt.days
@@ -106,11 +113,13 @@ def fit_linear_model(df: pd.DataFrame, metric_col: str = "total_sent") -> Tuple[
     return linmod, df
 
 
-def predict_future(linmod: sm.OLS, df: pd.DataFrame, horizon_days: int = 180) -> Tuple[pd.DataFrame, np.ndarray]:
+def predict_future(
+    linmod: sm.OLS, df: pd.DataFrame, horizon_days: int = 180
+) -> Tuple[pd.DataFrame, np.ndarray]:
     """Generate future predictions with confidence intervals."""
     future_days = np.arange(
         df["days_since_start"].max() + 1,
-        df["days_since_start"].max() + horizon_days + 1
+        df["days_since_start"].max() + horizon_days + 1,
     )
 
     X_future = sm.add_constant(future_days)
@@ -122,7 +131,9 @@ def predict_future(linmod: sm.OLS, df: pd.DataFrame, horizon_days: int = 180) ->
     return pred_band, future_dates
 
 
-def calculate_quiet_date(linmod: sm.OLS, df: pd.DataFrame, quiet_threshold: int = 5) -> Optional[pd.Timestamp]:
+def calculate_quiet_date(
+    linmod: sm.OLS, df: pd.DataFrame, quiet_threshold: int = 5
+) -> Optional[pd.Timestamp]:
     """Calculate the predicted quiet date based on linear regression."""
     slope, intercept = linmod.params[1], linmod.params[0]
 
@@ -141,7 +152,7 @@ def plot_canvas_forecast(
     horizon_days: int = 180,
     figsize: Tuple[int, int] = (12, 6),
     save_path: Optional[Path] = None,
-    show_plot: bool = True
+    show_plot: bool = True,
 ) -> Optional[pd.Timestamp]:
     """
     Create a comprehensive plot showing Canvas data, linear fit, and quiet date forecast.
@@ -172,7 +183,9 @@ def plot_canvas_forecast(
     plt.figure(figsize=figsize)
 
     # Scatter of actual points
-    plt.scatter(df["date"], df[metric_col], s=25, alpha=0.8, label="actual", color="blue")
+    plt.scatter(
+        df["date"], df[metric_col], s=25, alpha=0.8, label="actual", color="blue"
+    )
 
     try:
         # Fit model
@@ -194,19 +207,24 @@ def plot_canvas_forecast(
             pred_band["mean_ci_upper"],
             alpha=0.2,
             label="95% CI (mean)",
-            color="red"
+            color="red",
         )
 
         if quiet_date is not None:
-            plt.axvline(quiet_date, ls=":", color="green",
-                       label=f"predicted quiet: {quiet_date.date()}")
+            plt.axvline(
+                quiet_date,
+                ls=":",
+                color="green",
+                label=f"predicted quiet: {quiet_date.date()}",
+            )
 
         # Add model statistics
         r_squared = linmod.rsquared
         slope = linmod.params[1]
-        intercept = linmod.params[0]
 
-        plt.title(f"{metric_col}: Canvas Forecast (R²={r_squared:.3f}, slope={slope:.3f})")
+        plt.title(
+            f"{metric_col}: Canvas Forecast (R²={r_squared:.3f}, slope={slope:.3f})"
+        )
 
     except (ValueError, np.linalg.LinAlgError) as e:
         # Handle regression errors gracefully
@@ -215,8 +233,12 @@ def plot_canvas_forecast(
         print(f"Regression failed: {e}")
 
     # Threshold line (always show)
-    plt.axhline(quiet_threshold, ls="--", color="orange",
-                label=f"quiet threshold = {quiet_threshold}")
+    plt.axhline(
+        quiet_threshold,
+        ls="--",
+        color="orange",
+        label=f"quiet threshold = {quiet_threshold}",
+    )
 
     plt.ylabel(metric_col)
     plt.xlabel("Date")
@@ -244,7 +266,7 @@ def plot_multiple_canvases(
     quiet_threshold: int = 5,
     max_canvases: int = 9,
     figsize: Tuple[int, int] = (15, 10),
-    save_path: Optional[Path] = None
+    save_path: Optional[Path] = None,
 ) -> None:
     """
     Create subplots for multiple canvases.
@@ -284,16 +306,28 @@ def plot_multiple_canvases(
         ax = axes[i]
 
         if not metrics:
-            ax.text(0.5, 0.5, f"No data for {canvas_id}",
-                   ha='center', va='center', transform=ax.transAxes)
+            ax.text(
+                0.5,
+                0.5,
+                f"No data for {canvas_id}",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
             ax.set_title(f"Canvas: {canvas_id[:20]}...")
             continue
 
         # Convert to DataFrame
         df = canvas_metrics_to_dataframe(metrics)
         if df.empty:
-            ax.text(0.5, 0.5, f"No valid data for {canvas_id}",
-                   ha='center', va='center', transform=ax.transAxes)
+            ax.text(
+                0.5,
+                0.5,
+                f"No valid data for {canvas_id}",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
             ax.set_title(f"Canvas: {canvas_id[:20]}...")
             continue
 
@@ -306,8 +340,13 @@ def plot_multiple_canvases(
             # Plot
             ax.scatter(df["date"], df[metric_col], s=15, alpha=0.7, color="blue")
             ax.plot(future_dates, pred_band["mean"], lw=1.5, color="red")
-            ax.fill_between(future_dates, pred_band["mean_ci_lower"],
-                          pred_band["mean_ci_upper"], alpha=0.2, color="red")
+            ax.fill_between(
+                future_dates,
+                pred_band["mean_ci_lower"],
+                pred_band["mean_ci_upper"],
+                alpha=0.2,
+                color="red",
+            )
             ax.axhline(quiet_threshold, ls="--", color="orange", alpha=0.7)
 
             if quiet_date is not None:
@@ -325,8 +364,14 @@ def plot_multiple_canvases(
             ax.set_title(f"{canvas_id[:20]}...\nRegression failed: {str(e)[:30]}...")
             print(f"Regression failed for {canvas_id}: {e}")
         except Exception as e:
-            ax.text(0.5, 0.5, f"Error: {str(e)[:30]}...",
-                   ha='center', va='center', transform=ax.transAxes)
+            ax.text(
+                0.5,
+                0.5,
+                f"Error: {str(e)[:30]}...",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
             ax.set_title(f"Canvas: {canvas_id[:20]}...")
 
         ax.set_ylabel(metric_col)
@@ -347,8 +392,8 @@ def plot_multiple_canvases(
 
 def sanitize_filename(name: str) -> str:
     """Sanitize a string to be safe for use as a filename."""
-    name = name.strip().replace(' ', '_')
-    name = re.sub(r'[^\w\-_\.]+', '', name)
+    name = name.strip().replace(" ", "_")
+    name = re.sub(r"[^\w\-_\.]+", "", name)
     return name[:80]  # limit length
 
 
@@ -357,7 +402,7 @@ def create_forecast_report_plots(
     output_dir: Path,
     metric_col: str = "total_sent",
     quiet_threshold: int = 5,
-    name_map: dict = None
+    name_map: Optional[dict] = None,
 ) -> None:
     """
     Create and save forecast plots for multiple canvases, using canvas name in filename if available.
@@ -388,7 +433,7 @@ def create_forecast_report_plots(
                 metric_col=metric_col,
                 quiet_threshold=quiet_threshold,
                 save_path=plot_path,
-                show_plot=False
+                show_plot=False,
             )
         except Exception as e:
             print(f"Error creating plot for {canvas_id}: {e}")
@@ -400,7 +445,7 @@ def create_forecast_report_plots(
             canvas_data,
             metric_col=metric_col,
             quiet_threshold=quiet_threshold,
-            save_path=multi_plot_path
+            save_path=multi_plot_path,
         )
     except Exception as e:
         print(f"Error creating multi-canvas plot: {e}")

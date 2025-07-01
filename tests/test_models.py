@@ -1,17 +1,7 @@
 """Unit tests for the models module."""
 
-import pytest
-from datetime import datetime
-
-from src.models import (
-    Canvas,
-    CanvasListResponse,
-    CanvasVariant,
-    CanvasStepPath,
-    CanvasStep,
-    CanvasDetails,
-    RequestLog,
-)
+from src.models import (Canvas, CanvasDetails, CanvasListResponse, CanvasStep,
+                        CanvasStepPath, CanvasVariant, RequestLog)
 
 
 class TestCanvas:

@@ -129,9 +129,7 @@ Examples:
 
         data_dir = Path("data")
         if not data_dir.exists():
-            logger.error(
-                "Data directory does not exist. Run data ingestion first."
-            )
+            logger.error("Data directory does not exist. Run data ingestion first.")
             sys.exit(1)
 
         # Check for hierarchical Canvas directories (new format only)

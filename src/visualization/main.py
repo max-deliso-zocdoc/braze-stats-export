@@ -2,19 +2,16 @@
 """Main script for Canvas forecast visualization."""
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
 from typing import Optional
-import json
 
 from ..forecasting.linear_decay import StepBasedForecaster
-from .canvas_forecast import (
-    plot_canvas_forecast,
-    plot_multiple_canvases,
-    create_forecast_report_plots,
-    validate_canvas_data
-)
+from .canvas_forecast import (create_forecast_report_plots,
+                              plot_canvas_forecast, plot_multiple_canvases,
+                              validate_canvas_data)
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -23,7 +20,7 @@ def setup_logging(verbose: bool = False) -> None:
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[logging.StreamHandler()]
+        handlers=[logging.StreamHandler()],
     )
 
 
@@ -36,7 +33,12 @@ def get_canvas_name_mapping(data_dir: Path) -> dict:
     return {}
 
 
-def load_canvas_data(data_dir: Path, max_canvases: Optional[int] = None, metric_col: str = "total_sent", filter_prefix: Optional[str] = None) -> dict:
+def load_canvas_data(
+    data_dir: Path,
+    max_canvases: Optional[int] = None,
+    metric_col: str = "total_sent",
+    filter_prefix: Optional[str] = None,
+) -> dict:
     """Load canvas data from the data directory, optionally filtering by name prefix."""
     forecaster = StepBasedForecaster(quiet_threshold=5)
     canvas_dirs = [d for d in data_dir.iterdir() if d.is_dir()]
@@ -56,7 +58,9 @@ def load_canvas_data(data_dir: Path, max_canvases: Optional[int] = None, metric_
             if canvas_name.lower().startswith(filter_prefix):
                 filtered.append(d)
         canvas_dirs = filtered
-        logging.info("Filtered to %d canvases with prefix '%s'", len(canvas_dirs), filter_prefix)
+        logging.info(
+            "Filtered to %d canvases with prefix '%s'", len(canvas_dirs), filter_prefix
+        )
 
     if max_canvases:
         canvas_dirs = canvas_dirs[:max_canvases]
@@ -79,7 +83,9 @@ def load_canvas_data(data_dir: Path, max_canvases: Optional[int] = None, metric_
             logging.warning("Error loading %s: %s", canvas_id, e)
 
     if skipped_count > 0:
-        logging.info("Skipped %d canvases due to insufficient or invalid data", skipped_count)
+        logging.info(
+            "Skipped %d canvases due to insufficient or invalid data", skipped_count
+        )
 
     return canvas_data
 
@@ -109,75 +115,66 @@ Examples:
         "--data-dir",
         type=Path,
         default=Path("data"),
-        help="Directory containing canvas data (default: data)"
+        help="Directory containing canvas data (default: data)",
     )
 
-    parser.add_argument(
-        "--output",
-        type=Path,
-        help="Output directory for saving plots"
-    )
+    parser.add_argument("--output", type=Path, help="Output directory for saving plots")
 
-    parser.add_argument(
-        "--canvas-id",
-        type=str,
-        help="Specific canvas ID to visualize"
-    )
+    parser.add_argument("--canvas-id", type=str, help="Specific canvas ID to visualize")
 
     parser.add_argument(
         "--metric",
         type=str,
         default="total_sent",
         choices=[
-            "total_sent", "total_opens", "total_unique_opens", "total_clicks",
-            "total_unique_clicks", "total_delivered", "total_bounces",
-            "total_unsubscribes", "active_steps", "active_channels"
+            "total_sent",
+            "total_opens",
+            "total_unique_opens",
+            "total_clicks",
+            "total_unique_clicks",
+            "total_delivered",
+            "total_bounces",
+            "total_unsubscribes",
+            "active_steps",
+            "active_channels",
         ],
-        help="Metric to analyze (default: total_sent)"
+        help="Metric to analyze (default: total_sent)",
     )
 
     parser.add_argument(
         "--quiet-threshold",
         type=int,
         default=5,
-        help="Daily sends below this are considered 'quiet' (default: 5)"
+        help="Daily sends below this are considered 'quiet' (default: 5)",
     )
 
     parser.add_argument(
         "--horizon-days",
         type=int,
         default=180,
-        help="Number of days to predict into the future (default: 180)"
+        help="Number of days to predict into the future (default: 180)",
     )
 
     parser.add_argument(
-        "--max-canvases",
-        type=int,
-        help="Maximum number of canvases to process"
+        "--max-canvases", type=int, help="Maximum number of canvases to process"
     )
 
     parser.add_argument(
-        "--overview",
-        action="store_true",
-        help="Create multi-canvas overview plot"
+        "--overview", action="store_true", help="Create multi-canvas overview plot"
     )
 
     parser.add_argument(
         "--no-display",
         action="store_true",
-        help="Don't display plots (only save if --output is specified)"
+        help="Don't display plots (only save if --output is specified)",
     )
 
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Enable verbose logging"
-    )
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
     parser.add_argument(
         "--filter-prefix",
         type=str,
-        help="Only analyze canvases whose names start with this prefix (case-insensitive)"
+        help="Only analyze canvases whose names start with this prefix (case-insensitive)",
     )
 
     args = parser.parse_args()
@@ -207,7 +204,9 @@ Examples:
             sys.exit(1)
     else:
         # Multiple canvas mode
-        canvas_data = load_canvas_data(args.data_dir, args.max_canvases, args.metric, args.filter_prefix)
+        canvas_data = load_canvas_data(
+            args.data_dir, args.max_canvases, args.metric, args.filter_prefix
+        )
         if not canvas_data:
             logging.error("No canvas data found")
             sys.exit(1)
@@ -227,18 +226,20 @@ Examples:
                 metric_col=args.metric,
                 quiet_threshold=args.quiet_threshold,
                 max_canvases=args.max_canvases or 9,
-                save_path=save_path
+                save_path=save_path,
             )
         elif args.output:
             # Create individual plots for all canvases
-            logging.info("Creating individual plots for %d canvases...", len(canvas_data))
+            logging.info(
+                "Creating individual plots for %d canvases...", len(canvas_data)
+            )
             name_map = get_canvas_name_mapping(args.data_dir)
             create_forecast_report_plots(
                 canvas_data=canvas_data,
                 output_dir=args.output,
                 metric_col=args.metric,
                 quiet_threshold=args.quiet_threshold,
-                name_map=name_map
+                name_map=name_map,
             )
         else:
             # Show individual plot for first canvas
@@ -251,7 +252,7 @@ Examples:
                 metric_col=args.metric,
                 quiet_threshold=args.quiet_threshold,
                 horizon_days=args.horizon_days,
-                show_plot=not args.no_display
+                show_plot=not args.no_display,
             )
 
             if quiet_date:

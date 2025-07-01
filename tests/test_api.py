@@ -1,14 +1,13 @@
 """Unit tests for the API client module."""
 
-import json
-import pytest
-from unittest.mock import Mock, patch, mock_open
+from unittest.mock import Mock, mock_open, patch
 
+import pytest
 import requests
 from requests import Response
 
 from src.api import BrazeAPIClient
-from src.models import CanvasListResponse, CanvasDetails
+from src.models import CanvasDetails, CanvasListResponse
 
 
 class TestBrazeAPIClient:

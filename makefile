@@ -1,4 +1,4 @@
-.PHONY: setup venv install lint test fmt clean forecast ingest-historical typecheck check visualization visualization-save
+.PHONY: setup venv install lint test fmt clean forecast ingest-historical typecheck check visualization visualization-save fmt-fix clean-imports auto-fix check-fix
 
 PYTHON_VERSION ?= 3.11.4
 VENV_NAME      ?= braze-extractor-env
@@ -33,6 +33,21 @@ test-cov:
 
 fmt:
 	pyenv exec black src/ tests/
+
+# Auto-fix formatting issues
+fmt-fix:
+	pyenv exec black src/ tests/
+	pyenv exec isort src/ tests/
+
+# Auto-fix import and unused code issues
+clean-imports:
+	pyenv exec autoflake --in-place --remove-all-unused-imports --remove-unused-variables --recursive src/ tests/
+
+# Auto-fix all automatically fixable issues
+auto-fix: fmt-fix clean-imports
+
+# Enhanced check that includes auto-fixing
+check-fix: auto-fix check
 
 clean:
 	@pyenv virtualenv-delete -f $(VENV_NAME) || true

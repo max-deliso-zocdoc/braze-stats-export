@@ -23,9 +23,9 @@ import json
 import logging
 import os
 import sys
-from pathlib import Path
-from typing import Final, List, Dict, Any, Optional
 import time
+from pathlib import Path
+from typing import Any, Dict, Final, List, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -420,7 +420,9 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
                                         records_replaced += 1
                                 except json.JSONDecodeError:
                                     logger.warning(
-                                        "Skipping malformed line in {}".format(channel_file)
+                                        "Skipping malformed line in {}".format(
+                                            channel_file
+                                        )
                                     )
                                     continue
 
@@ -435,7 +437,9 @@ def append_canvas_data(canvas_id: str, daily_records: List[Dict[str, Any]]) -> i
 
                 # Add all the message metrics
                 if len(channel_data) > 0:
-                    metrics = channel_data[0]  # Usually first element contains the metrics
+                    metrics = channel_data[
+                        0
+                    ]  # Usually first element contains the metrics
                     channel_record.update(metrics)
 
                 # Add the new record to the list
@@ -514,22 +518,32 @@ def ingest_historical_data(
                         success_count += 1
                         logger.info(
                             "✓ ({}/{}) {:30} | {:3} records processed | {:3}/{:3} days (complete)".format(
-                                i, len(canvas_ids), canvas_name[:30], records_processed,
-                                len(daily_records), expected_days
+                                i,
+                                len(canvas_ids),
+                                canvas_name[:30],
+                                records_processed,
+                                len(daily_records),
+                                expected_days,
                             )
                         )
                     else:
                         partial_success_count += 1
                         logger.warning(
                             "◐ ({}/{}) {:30} | {:3} records processed | {:3}/{:3} days (partial)".format(
-                                i, len(canvas_ids), canvas_name[:30], records_processed,
-                                len(daily_records), expected_days
+                                i,
+                                len(canvas_ids),
+                                canvas_name[:30],
+                                records_processed,
+                                len(daily_records),
+                                expected_days,
                             )
                         )
                 else:
                     error_count += 1
                     logger.warning(
-                        "◯ ({}/{}) {:30} | No data available".format(i, len(canvas_ids), canvas_name[:30])
+                        "◯ ({}/{}) {:30} | No data available".format(
+                            i, len(canvas_ids), canvas_name[:30]
+                        )
                     )
 
             except Exception as exc:
@@ -554,16 +568,10 @@ def ingest_historical_data(
         logger.info("  • Partial success: {}".format(partial_success_count))
         logger.info("  • Failed: {}".format(error_count))
         logger.info("  • Total records processed: {}".format(total_records_processed))
-        logger.info(
-            "  • Date range: {} to {}".format(
-                start_date, end_date
-            )
-        )
+        logger.info("  • Date range: {} to {}".format(start_date, end_date))
 
     except Exception as exc:
-        logger.error(
-            "Fatal error during historical ingestion: {}".format(exc)
-        )
+        logger.error("Fatal error during historical ingestion: {}".format(exc))
         raise
 
 

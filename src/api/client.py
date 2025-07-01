@@ -8,7 +8,7 @@ from typing import List
 import requests
 from requests import Response
 
-from ..models import CanvasListResponse, CanvasDetails, RequestLog
+from ..models import CanvasDetails, CanvasListResponse, RequestLog
 
 logger = logging.getLogger(__name__)
 

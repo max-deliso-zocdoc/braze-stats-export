@@ -10,3 +10,5 @@ mypy~=1.8.0
 pandas~=2.0.0
 matplotlib~=3.7.0
 statsmodels~=0.14.0
+isort~=5.13
+autoflake~=2.3

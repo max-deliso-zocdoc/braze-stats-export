@@ -7,20 +7,18 @@ Works with step-based directory structure for granular Canvas analytics.
 
 import json
 import logging
-from datetime import datetime, date, timedelta
-from pathlib import Path
-from typing import List, Dict, Any, Optional, NamedTuple, Set
-from dataclasses import dataclass
 import math
-from collections import defaultdict
 import os
-import requests
-from typing_extensions import TypedDict
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, NamedTuple, Optional, Set
 
 import numpy as np
 import pandas as pd
+import requests
 from scipy import stats
-
+from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -92,21 +90,21 @@ def _read_all_jsonl(canvas_dir: Path) -> pd.DataFrame:
     """Read all JSONL files in the canvas directory structure into a single DataFrame."""
     # Collect DataFrames for each file
     dfs: list[pd.DataFrame] = []
-    for jsonl_path in canvas_dir.rglob("*.jsonl"):        # walks step/channel folders
+    for jsonl_path in canvas_dir.rglob("*.jsonl"):  # walks step/channel folders
         if jsonl_path.stat().st_size == 0:
             continue
 
         # Build two helper columns so we can compute "active steps/channels" later
-        step_id     = jsonl_path.parent.name              # .../step_id/channel.jsonl
+        step_id = jsonl_path.parent.name  # .../step_id/channel.jsonl
         channel_key = f"{step_id}:{jsonl_path.stem}"
 
         df = pd.read_json(jsonl_path, lines=True)
-        df["step_id"]   = step_id
-        df["chan_key"]  = channel_key
+        df["step_id"] = step_id
+        df["chan_key"] = channel_key
         dfs.append(df)
 
     if not dfs:
-        return pd.DataFrame()          # empty safeguard
+        return pd.DataFrame()  # empty safeguard
     return pd.concat(dfs, ignore_index=True)
 
 
@@ -118,13 +116,21 @@ def _pandas_aggregate(canvas_dir: Path, canvas_id: str) -> List[CanvasMetrics]:
         return []
 
     # Parse & normalise dates in bulk
-    raw["date"] = pd.to_datetime(raw["date"], errors="coerce").dt.normalize()  # midnight
-    raw = raw.dropna(subset=["date"])                                          # toss bad rows
+    raw["date"] = pd.to_datetime(
+        raw["date"], errors="coerce"
+    ).dt.normalize()  # midnight
+    raw = raw.dropna(subset=["date"])  # toss bad rows
 
     # Fill missing columns with 0 (for channels that don't have certain metrics)
     metric_columns = [
-        "sent", "opens", "unique_opens", "clicks", "unique_clicks",
-        "delivered", "bounces", "unsubscribes"
+        "sent",
+        "opens",
+        "unique_opens",
+        "clicks",
+        "unique_clicks",
+        "delivered",
+        "bounces",
+        "unsubscribes",
     ]
     for col in metric_columns:
         if col not in raw.columns:
@@ -133,39 +139,39 @@ def _pandas_aggregate(canvas_dir: Path, canvas_id: str) -> List[CanvasMetrics]:
             raw[col] = raw[col].fillna(0).astype(int)
 
     # Aggregate with one groupby.agg
-    agg = (raw
-           .groupby("date")
-           .agg(
-               total_sent          = ("sent",            "sum"),
-               total_opens         = ("opens",           "sum"),
-               total_unique_opens  = ("unique_opens",    "sum"),
-               total_clicks        = ("clicks",          "sum"),
-               total_unique_clicks = ("unique_clicks",   "sum"),
-               total_delivered     = ("delivered",       "sum"),
-               total_bounces       = ("bounces",         "sum"),
-               total_unsubscribes  = ("unsubscribes",    "sum"),
-               active_steps        = ("step_id",         "nunique"),
-               active_channels     = ("chan_key",        "nunique"),
-           )
-           .reset_index()
-           .sort_values("date")
+    agg = (
+        raw.groupby("date")
+        .agg(
+            total_sent=("sent", "sum"),
+            total_opens=("opens", "sum"),
+            total_unique_opens=("unique_opens", "sum"),
+            total_clicks=("clicks", "sum"),
+            total_unique_clicks=("unique_clicks", "sum"),
+            total_delivered=("delivered", "sum"),
+            total_bounces=("bounces", "sum"),
+            total_unsubscribes=("unsubscribes", "sum"),
+            active_steps=("step_id", "nunique"),
+            active_channels=("chan_key", "nunique"),
+        )
+        .reset_index()
+        .sort_values("date")
     )
 
     # Convert rows → CanvasMetrics objects
     result: list[CanvasMetrics] = [
         CanvasMetrics(
-            date              = row.date.date(),      # convert Timestamp → date
-            canvas_id         = canvas_id,
-            total_sent        = int(row.total_sent),
-            total_opens       = int(row.total_opens),
-            total_unique_opens= int(row.total_unique_opens),
-            total_clicks      = int(row.total_clicks),
+            date=row.date.date(),  # convert Timestamp → date
+            canvas_id=canvas_id,
+            total_sent=int(row.total_sent),
+            total_opens=int(row.total_opens),
+            total_unique_opens=int(row.total_unique_opens),
+            total_clicks=int(row.total_clicks),
             total_unique_clicks=int(row.total_unique_clicks),
-            total_delivered   = int(row.total_delivered),
-            total_bounces     = int(row.total_bounces),
-            total_unsubscribes= int(row.total_unsubscribes),
-            active_steps      = int(row.active_steps),
-            active_channels   = int(row.active_channels),
+            total_delivered=int(row.total_delivered),
+            total_bounces=int(row.total_bounces),
+            total_unsubscribes=int(row.total_unsubscribes),
+            active_steps=int(row.active_steps),
+            active_channels=int(row.active_channels),
         )
         for row in agg.itertuples(index=False)
     ]
@@ -382,7 +388,9 @@ class StepBasedForecaster:
                     y_nonzero = y_values_array[non_zero_mask]
 
                     # Use log-space fitting for better numerical stability
-                    popt, exp_r_squared = self._fit_exponential_log_space(x_nonzero, y_nonzero)
+                    popt, exp_r_squared = self._fit_exponential_log_space(
+                        x_nonzero, y_nonzero
+                    )
                     log_a, b, c = popt
 
                     # Convert log_a back to a for compatibility
@@ -393,7 +401,9 @@ class StepBasedForecaster:
                             "type": "exponential",
                             "params": {"a": a, "b": b, "c": c, "log_a": log_a},
                             "r_squared": exp_r_squared,
-                            "function": lambda x: self._log_exponential_decay_func(x, log_a, b, c),
+                            "function": lambda x: self._log_exponential_decay_func(
+                                x, log_a, b, c
+                            ),
                         }
                     )
                 except Exception as e:
@@ -411,7 +421,9 @@ class StepBasedForecaster:
                 best_r_squared = best_model["r_squared"]
 
                 # Determine current trend
-                recent_values = y_values_array[-min(7, len(y_values_array)) :]  # Last week
+                recent_values = y_values_array[
+                    -min(7, len(y_values_array)) :
+                ]  # Last week
                 if len(recent_values) >= 2:
                     recent_trend = np.mean(np.diff(recent_values))
                     if recent_trend < -3:
@@ -427,6 +439,14 @@ class StepBasedForecaster:
                 quiet_date: Optional[date] = None
                 days_to_quiet: Optional[int] = None
                 confidence = best_model["r_squared"]
+
+                # Reduce confidence for growing trends since they don't make sense for quiet date prediction
+                if trend == "growing":
+                    confidence *= (
+                        0.3  # Significantly reduce confidence for growing trends
+                    )
+                elif trend == "stable":
+                    confidence *= 0.7  # Reduce confidence for stable trends as well
 
                 if best_model["type"] == "linear":
                     # For linear model: solve slope * x + intercept = quiet_threshold
@@ -512,7 +532,9 @@ class QuietDatePredictor:
         self.data_dir = data_dir or Path("data")
         self.forecaster = StepBasedForecaster(quiet_threshold=quiet_threshold)
         self._canvas_names: Optional[Dict[str, str]] = None  # Cache for canvas names
-        self.canvas_name_filter: Optional[str] = None  # Optional filter prefix for canvas names
+        self.canvas_name_filter: Optional[str] = (
+            None  # Optional filter prefix for canvas names
+        )
 
     def _get_canvas_name_mapping(self) -> Dict[str, str]:
         """Get a mapping of Canvas ID to Canvas name from saved index or Braze API."""
@@ -718,7 +740,9 @@ class QuietDatePredictor:
             canvas_data = {
                 "canvas_id": result.canvas_id,
                 "canvas_name": result.canvas_name,
-                "quiet_date": result.quiet_date.isoformat() if result.quiet_date else None,
+                "quiet_date": (
+                    result.quiet_date.isoformat() if result.quiet_date else None
+                ),
                 "days_to_quiet": result.days_to_quiet,
                 "confidence": result.confidence,
                 "r_squared": result.r_squared,
@@ -753,7 +777,9 @@ class QuietDatePredictor:
                 "unpredictable": unpredictable,
                 "going_quiet_soon": going_quiet_soon,
                 "going_quiet_later": going_quiet_later,
-                "prediction_rate": (predictable / total_canvases) if total_canvases else 0,
+                "prediction_rate": (
+                    (predictable / total_canvases) if total_canvases else 0
+                ),
                 "avg_days_to_quiet": avg_days_to_quiet,
                 "avg_confidence": avg_confidence,
             },
